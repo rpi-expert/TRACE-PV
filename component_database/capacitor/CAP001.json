@@ -1,0 +1,18 @@
+{
+  "part_number": "Rubycon_475VXG330MEFCSN30X55",
+  "capacitor_type": "ALUMINUM_ELECTROLYTIC",
+  "voltage_type": "DC",
+  "coefficients": {
+    "beta_min": 3,
+    "beta_max": 5,
+    "L0": 4993,
+    "V0": 475,
+    "T0": 105
+  },
+  "rth_amb": 16.6783,
+  "rth_surf": 8.3391,
+  "esr": 1.5071e-4,
+  "capacitance": 330e-6,
+  "description": "SMA SUNNY TRIPOWER 30000TL-US DC Caps"
+}
+

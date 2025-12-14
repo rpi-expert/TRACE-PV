@@ -1,0 +1,12 @@
+Topology: 3l1s
+Number of GPUs: 2
+Total Cases: 45945
+Batch Size: 552
+Number of Rounds: 6
+Total Wall Clock Time: 171.840759 s
+Simulation Time per GPU:
+  GPU 0: 146.015159 s
+  GPU 1: 165.301935 s
+Total Compute Time (all GPUs): 311.317094 s
+Average Time per Case: 0.003740 s
+Speedup: 1.811660x

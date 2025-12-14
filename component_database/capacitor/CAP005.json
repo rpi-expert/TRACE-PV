@@ -1,0 +1,20 @@
+{
+  "part_number": "Panasonic P/N EZPE80606MTA",
+  "capacitor_type": "FILM",
+  "voltage_type": "DC",
+  "coefficients": {
+    "A": 5874,
+    "n": 0,
+    "Ea": 0.777,
+    "beta": -0.011,
+    "V_rated": 800,
+    "T_ref": 343.15,
+    "RH_ref": 70.0
+  },
+  "rth_amb": 0.50,
+  "rth_surf": 0.30,
+  "esr": 0.010,
+  "capacitance": 560e-6,
+  "description": "Solectria XGI 1000 Inverter - DC caps"
+}
+

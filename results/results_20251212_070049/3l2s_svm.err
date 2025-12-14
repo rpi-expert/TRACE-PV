@@ -1,0 +1,168 @@
+DEBUG: IGBT Power Module Coefficients:
+  DeltaT Model:
+    A: 30000
+    n: 3.476
+    Ea: 0.042 eV
+  Arrhenius Model:
+    A: 259.693
+    n1: 2.66
+    n2: 2.2
+    Ea: 0.79 eV
+    RH_ref: 95 %
+    T_ref: 348.15 K
+    V_ref: 800 V
+DEBUG: Capacitor loss calculation:
+  I_cap_rms: 47.8809 A
+  ESR: 0.00015071 Ohm
+  Capacitor loss: 0.345515 W
+DEBUG: Capacitor thermal model inputs:
+  Capacitor loss: 0.345515 W
+  Internal temp: 12.2824 C
+  rth_amb: 16.6783 K/W
+  rth_surf: 8.3391 K/W
+DEBUG: IGBT thermal model output:
+  AC power: 15.39 W
+  Ambient temp: 2.09 C
+  Junction temp: 2.11821 C
+DEBUG: Capacitor loaded successfully:
+  Part number: Rubycon_475VXG330MEFCSN30X55
+  Type: ALUMINUM_ELECTROLYTIC
+  Voltage type: DC
+  Batch size: 552
+  First voltage: 1000 V
+  First hotspot temp: 18.045 C
+  First internal RH: 92.9384 %
+  L0: 4993
+  V0: 475
+  T0: 105
+  beta_min: 3
+  beta_max: 5
+  Batch capacitor stressor: 0.000288925
+DEBUG: IGBT Reliability Analysis:
+  Accumulated junction temps: 3864 points
+  Junction temp range: [0.000366667, 76.6226] C
+DEBUG: IGBT Rainflow Counting Results:
+  Tj_max: 76.6226 C
+  Number of cycles: 107
+  First few cycles:
+    Cycle 0: deltaT=6.38961 C, cycles=1
+    Cycle 1: deltaT=13.8377 C, cycles=1
+    Cycle 2: deltaT=1.07334 C, cycles=1
+    Cycle 3: deltaT=4.28332 C, cycles=1
+    Cycle 4: deltaT=4.32223 C, cycles=1
+DEBUG: IGBT DeltaT Model Calculation (Cycle 0):
+  deltaT: 6.38961 C
+  Tj_begin: 22.4541 C
+  Tj_end: 16.0645 C
+  Tj_max: 22.4541 C
+  cycles: 1
+  Nf: 9.84036e+07
+  stressor (cycles/Nf): 1.01622e-08
+DEBUG: IGBT DeltaT Model Calculation (Cycle 1):
+  deltaT: 13.8377 C
+  Tj_begin: 41.6837 C
+  Tj_end: 55.5214 C
+  Tj_max: 55.5214 C
+  cycles: 1
+  Nf: 1.22316e+09
+  stressor (cycles/Nf): 8.17558e-10
+DEBUG: IGBT DeltaT Model Calculation (Cycle 2):
+  deltaT: 1.07334 C
+  Tj_begin: 61.6235 C
+  Tj_end: 60.5502 C
+  Tj_max: 61.6235 C
+  cycles: 1
+  Nf: 164530
+  stressor (cycles/Nf): 6.07793e-06
+DEBUG: IGBT DeltaT Model Calculation (Cycle 3):
+  deltaT: 4.28332 C
+  Tj_begin: 53.8397 C
+  Tj_end: 58.123 C
+  Tj_max: 58.123 C
+  cycles: 1
+  Nf: 2.05188e+07
+  stressor (cycles/Nf): 4.87359e-08
+DEBUG: IGBT DeltaT Model Calculation (Cycle 4):
+  deltaT: 4.32223 C
+  Tj_begin: 38.8994 C
+  Tj_end: 43.2217 C
+  Tj_max: 43.2217 C
+  cycles: 1
+  Nf: 2.26934e+07
+  stressor (cycles/Nf): 4.40657e-08
+DEBUG: IGBT Arrhenius Model Calculation (Interval 0):
+  Tj: 2.11821 C
+  Lifetime: 2.33353e+23 hours
+  Stressor (5 min / lifetime*60): 3.57113e-25
+DEBUG: IGBT Arrhenius Model Calculation (Interval 1):
+  Tj: 2.01997 C
+  Lifetime: 2.3592e+23 hours
+  Stressor (5 min / lifetime*60): 3.53227e-25
+DEBUG: IGBT Arrhenius Model Calculation (Interval 2):
+  Tj: 1.94112 C
+  Lifetime: 2.38002e+23 hours
+  Stressor (5 min / lifetime*60): 3.50137e-25
+DEBUG: IGBT Arrhenius Model Calculation (Interval 3):
+  Tj: 2.14316 C
+  Lifetime: 2.32705e+23 hours
+  Stressor (5 min / lifetime*60): 3.58107e-25
+DEBUG: IGBT Arrhenius Model Calculation (Interval 4):
+  Tj: 2.64455 C
+  Lifetime: 2.20098e+23 hours
+  Stressor (5 min / lifetime*60): 3.78619e-25
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.00216943
+  global_igbt_stressor_arrhenius: 2.7114e-18
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.00433886
+  global_igbt_stressor_arrhenius: 5.4228e-18
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0065083
+  global_igbt_stressor_arrhenius: 8.1342e-18
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.00867773
+  global_igbt_stressor_arrhenius: 1.08456e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0108472
+  global_igbt_stressor_arrhenius: 1.3557e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0130166
+  global_igbt_stressor_arrhenius: 1.62684e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.015186
+  global_igbt_stressor_arrhenius: 1.89798e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0173555
+  global_igbt_stressor_arrhenius: 2.16912e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0195249
+  global_igbt_stressor_arrhenius: 2.44026e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0216943
+  global_igbt_stressor_arrhenius: 2.7114e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0238637
+  global_igbt_stressor_arrhenius: 2.98254e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0260332
+  global_igbt_stressor_arrhenius: 3.25368e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.0282026
+  global_igbt_stressor_arrhenius: 3.52482e-17
+DEBUG: No degradation threshold reached yet
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.030372
+  global_igbt_stressor_arrhenius: 3.79596e-17
+DEBUG: Degradation reached - Capacitor

@@ -1,0 +1,1302 @@
+Simulation Model Loaded:
+  Capacitor: Rubycon_475VXG330MEFCSN30X55
+  Power Module: F3L75R12W1H3_B11
+  Fan Cooling: NMB 09238RE-24N-GU
+  PCB: PCB001
+  PV Panel: CS6U-330P
+
+Component model parameters can be retrieved from database:
+  ✓ Capacitor Rubycon_475VXG330MEFCSN30X55 loaded (type: ALUMINUM_ELECTROLYTIC, voltage: DC)
+  ✓ Power Module F3L75R12W1H3_B11 loaded
+  ✓ Fan Cooling NMB 09238RE-24N-GU loaded
+  ✓ PCB PCB001 loaded
+
+Mission Profile Loaded: 45945 cases
+
+Warning: No IV curve simulator available. Using simple PV voltage model.
+GPU Configuration:
+  Available GPUs: 2
+  GPUs to use: 2
+  GPU 0: NVIDIA RTX A4000
+    Compute Capability: 8.6
+    Multiprocessors: 48
+    Threads: 73728 (48 MPs * 1536 threads/MP)
+    Memory: 15.60 GB
+  GPU 1: NVIDIA RTX A4000
+    Compute Capability: 8.6
+    Multiprocessors: 48
+    Threads: 73728 (48 MPs * 1536 threads/MP)
+    Memory: 15.59 GB
+
+Aggregated Capacity (all GPUs):
+  Total Multiprocessors: 96
+  Total Threads: 147456
+  Total Memory: 31.19 GB
+
+Batch Size Calculation:
+  Total GPUs: 2
+  GPU 0 Threads: 73728 threads
+    (48 MPs * 1536 threads/MP)
+  GPU 1 Threads: 73728 threads
+    (48 MPs * 1536 threads/MP)
+  Total Threads (all GPUs): 147456 threads
+  Switching Periods per Fundamental: 266.67 periods
+    (switching_freq/fundamental_freq = 16000.00/60.00 = 266.67)
+  Fundamental Cycle Size: 21334 samples
+    (samples per switching period = 8 intervals * 10 samples = 80 samples)
+  Batch Size (threads): 552 cases
+    (total_threads / switching_periods = 147456 / 266.67 = 552)
+  Batch Size (memory): 9021 cases
+    (sum of per-GPU batch sizes: GPU0:4512 + GPU1:4509 = 9021 cases)
+  Final Batch Size: 552 cases per batch
+
+Simulation Configuration:
+  Topology: 3-level 2-stage
+  Modulation: svm
+  Total Cases: 45945
+  Rounds: 6
+
+
+========================================
+Starting Degradation Tracking Simulation
+Will run mission profile repeatedly until one component reaches degradation = 1.0
+========================================
+
+
+============================================================
+Mission Profile Iteration #1
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_1.csv (7657 records)
+Round 1/6 finished: 7657 cases in 46.13 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_1.csv (7657 records)
+Round 2/6 finished: 7657 cases in 45.85 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.002958e-04
+    Electrical (Internal): 1.121226e-03
+    Mechanical (External): 2.366230e-03
+    Mechanical (Internal): 3.570846e-03
+  Capacitor: 2.055121e-02
+  IGBT (DeltaT model): 7.162360e-04
+  IGBT (Arrhenius model): 8.397826e-17
+  PCB: 8.246975e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.156030e-04
+    Electrical (Internal): 1.723986e-03
+    Mechanical (External): 4.039659e-03
+    Mechanical (Internal): 6.058375e-03
+  Capacitor: 3.304169e-02
+  IGBT (DeltaT model): 1.229875e-03
+  IGBT (Arrhenius model): 1.273619e-16
+  PCB: 2.233874e-06
+
+  Stressor data saved to: results/stressor_round_3_iteration_1.csv (7657 records)
+Round 3/6 finished: 7657 cases in 45.57 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.100640e-04
+    Electrical (Internal): 2.432635e-03
+    Mechanical (External): 3.189007e-03
+    Mechanical (Internal): 4.805348e-03
+  Capacitor: 3.521028e-02
+  IGBT (DeltaT model): 7.068067e-04
+  IGBT (Arrhenius model): 1.116675e-16
+  PCB: 1.024790e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.525667e-03
+    Electrical (Internal): 4.156621e-03
+    Mechanical (External): 7.228666e-03
+    Mechanical (Internal): 1.086372e-02
+  Capacitor: 6.825197e-02
+  IGBT (DeltaT model): 1.936682e-03
+  IGBT (Arrhenius model): 2.390294e-16
+  PCB: 3.258664e-06
+
+  Stressor data saved to: results/stressor_round_4_iteration_1.csv (7657 records)
+Round 4/6 finished: 7657 cases in 45.67 s
+
+Accumulated Degradation Progress (Round 4):
+  Cooling Fan:
+    Electrical (External): 1.285533e-03
+    Electrical (Internal): 3.328596e-03
+    Mechanical (External): 3.685510e-03
+    Mechanical (Internal): 5.525900e-03
+  Capacitor: 4.489980e-02
+  IGBT (DeltaT model): 6.997457e-04
+  IGBT (Arrhenius model): 1.267464e-16
+  PCB: 2.623903e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.811200e-03
+    Electrical (Internal): 7.485217e-03
+    Mechanical (External): 1.091418e-02
+    Mechanical (Internal): 1.638962e-02
+  Capacitor: 1.131518e-01
+  IGBT (DeltaT model): 2.636428e-03
+  IGBT (Arrhenius model): 3.657758e-16
+  PCB: 5.882567e-06
+
+  Stressor data saved to: results/stressor_round_5_iteration_1.csv (7657 records)
+Round 5/6 finished: 7657 cases in 45.84 s
+
+Accumulated Degradation Progress (Round 5):
+  Cooling Fan:
+    Electrical (External): 8.816525e-04
+    Electrical (Internal): 2.395051e-03
+    Mechanical (External): 2.841698e-03
+    Mechanical (Internal): 4.298809e-03
+  Capacitor: 2.939754e-02
+  IGBT (DeltaT model): 5.516808e-04
+  IGBT (Arrhenius model): 1.052591e-16
+  PCB: 7.624311e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 3.692853e-03
+    Electrical (Internal): 9.880268e-03
+    Mechanical (External): 1.375587e-02
+    Mechanical (Internal): 2.068843e-02
+  Capacitor: 1.425493e-01
+  IGBT (DeltaT model): 3.188108e-03
+  IGBT (Arrhenius model): 4.710349e-16
+  PCB: 6.644998e-06
+
+  Stressor data saved to: results/stressor_round_6_iteration_1.csv (7660 records)
+Round 6/6 finished: 7660 cases in 45.87 s
+
+Accumulated Degradation Progress (Round 6):
+  Cooling Fan:
+    Electrical (External): 4.520397e-04
+    Electrical (Internal): 1.290574e-03
+    Mechanical (External): 1.938241e-03
+    Mechanical (Internal): 2.933848e-03
+  Capacitor: 1.839131e-02
+  IGBT (DeltaT model): 4.540570e-04
+  IGBT (Arrhenius model): 6.314007e-17
+  PCB: 2.320275e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+
+------------------------------------------------------------
+Mission Profile Iteration #1 Complete
+  Duration: 274.93 s
+------------------------------------------------------------
+
+Global Cumulative Degradation Progress (All Iterations):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+No component has reached degradation = 1.0 yet.
+Starting next mission profile iteration...
+
+
+============================================================
+Mission Profile Iteration #2
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_2.csv (7657 records)
+Round 1/6 finished: 7657 cases in 45.76 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_2.csv (7657 records)
+Round 2/6 finished: 7657 cases in 45.99 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.002958e-04
+    Electrical (Internal): 1.121226e-03
+    Mechanical (External): 2.366230e-03
+    Mechanical (Internal): 3.570846e-03
+  Capacitor: 2.055121e-02
+  IGBT (DeltaT model): 7.162360e-04
+  IGBT (Arrhenius model): 8.397826e-17
+  PCB: 8.246975e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.156030e-04
+    Electrical (Internal): 1.723986e-03
+    Mechanical (External): 4.039659e-03
+    Mechanical (Internal): 6.058375e-03
+  Capacitor: 3.304169e-02
+  IGBT (DeltaT model): 1.229875e-03
+  IGBT (Arrhenius model): 1.273619e-16
+  PCB: 2.233874e-06
+
+  Stressor data saved to: results/stressor_round_3_iteration_2.csv (7657 records)
+Round 3/6 finished: 7657 cases in 46.91 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.100640e-04
+    Electrical (Internal): 2.432635e-03
+    Mechanical (External): 3.189007e-03
+    Mechanical (Internal): 4.805348e-03
+  Capacitor: 3.521028e-02
+  IGBT (DeltaT model): 7.068067e-04
+  IGBT (Arrhenius model): 1.116675e-16
+  PCB: 1.024790e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.525667e-03
+    Electrical (Internal): 4.156621e-03
+    Mechanical (External): 7.228666e-03
+    Mechanical (Internal): 1.086372e-02
+  Capacitor: 6.825197e-02
+  IGBT (DeltaT model): 1.936682e-03
+  IGBT (Arrhenius model): 2.390294e-16
+  PCB: 3.258664e-06
+
+  Stressor data saved to: results/stressor_round_4_iteration_2.csv (7657 records)
+Round 4/6 finished: 7657 cases in 46.22 s
+
+Accumulated Degradation Progress (Round 4):
+  Cooling Fan:
+    Electrical (External): 1.285533e-03
+    Electrical (Internal): 3.328596e-03
+    Mechanical (External): 3.685510e-03
+    Mechanical (Internal): 5.525900e-03
+  Capacitor: 4.489980e-02
+  IGBT (DeltaT model): 6.997457e-04
+  IGBT (Arrhenius model): 1.267464e-16
+  PCB: 2.623903e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.811200e-03
+    Electrical (Internal): 7.485217e-03
+    Mechanical (External): 1.091418e-02
+    Mechanical (Internal): 1.638962e-02
+  Capacitor: 1.131518e-01
+  IGBT (DeltaT model): 2.636428e-03
+  IGBT (Arrhenius model): 3.657758e-16
+  PCB: 5.882567e-06
+
+  Stressor data saved to: results/stressor_round_5_iteration_2.csv (7657 records)
+Round 5/6 finished: 7657 cases in 45.70 s
+
+Accumulated Degradation Progress (Round 5):
+  Cooling Fan:
+    Electrical (External): 8.816525e-04
+    Electrical (Internal): 2.395051e-03
+    Mechanical (External): 2.841698e-03
+    Mechanical (Internal): 4.298809e-03
+  Capacitor: 2.939754e-02
+  IGBT (DeltaT model): 5.516808e-04
+  IGBT (Arrhenius model): 1.052591e-16
+  PCB: 7.624311e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 3.692853e-03
+    Electrical (Internal): 9.880268e-03
+    Mechanical (External): 1.375587e-02
+    Mechanical (Internal): 2.068843e-02
+  Capacitor: 1.425493e-01
+  IGBT (DeltaT model): 3.188108e-03
+  IGBT (Arrhenius model): 4.710349e-16
+  PCB: 6.644998e-06
+
+  Stressor data saved to: results/stressor_round_6_iteration_2.csv (7660 records)
+Round 6/6 finished: 7660 cases in 45.76 s
+
+Accumulated Degradation Progress (Round 6):
+  Cooling Fan:
+    Electrical (External): 4.520397e-04
+    Electrical (Internal): 1.290574e-03
+    Mechanical (External): 1.938241e-03
+    Mechanical (Internal): 2.933848e-03
+  Capacitor: 1.839131e-02
+  IGBT (DeltaT model): 4.540570e-04
+  IGBT (Arrhenius model): 6.314007e-17
+  PCB: 2.320275e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+
+------------------------------------------------------------
+Mission Profile Iteration #2 Complete
+  Duration: 276.36 s
+------------------------------------------------------------
+
+Global Cumulative Degradation Progress (All Iterations):
+  Cooling Fan:
+    Electrical (External): 8.289785e-03
+    Electrical (Internal): 2.234168e-02
+    Mechanical (External): 3.138823e-02
+    Mechanical (Internal): 4.724456e-02
+  Capacitor: 3.218812e-01
+  IGBT (DeltaT model): 7.284331e-03
+  IGBT (Arrhenius model): 1.068350e-15
+  PCB: 1.793055e-05
+
+No component has reached degradation = 1.0 yet.
+Starting next mission profile iteration...
+
+
+============================================================
+Mission Profile Iteration #3
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_3.csv (7657 records)
+Round 1/6 finished: 7657 cases in 45.75 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_3.csv (7657 records)
+Round 2/6 finished: 7657 cases in 45.66 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.002958e-04
+    Electrical (Internal): 1.121226e-03
+    Mechanical (External): 2.366230e-03
+    Mechanical (Internal): 3.570846e-03
+  Capacitor: 2.055121e-02
+  IGBT (DeltaT model): 7.162360e-04
+  IGBT (Arrhenius model): 8.397826e-17
+  PCB: 8.246975e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.156030e-04
+    Electrical (Internal): 1.723986e-03
+    Mechanical (External): 4.039659e-03
+    Mechanical (Internal): 6.058375e-03
+  Capacitor: 3.304169e-02
+  IGBT (DeltaT model): 1.229875e-03
+  IGBT (Arrhenius model): 1.273619e-16
+  PCB: 2.233874e-06
+
+  Stressor data saved to: results/stressor_round_3_iteration_3.csv (7657 records)
+Round 3/6 finished: 7657 cases in 45.61 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.100640e-04
+    Electrical (Internal): 2.432635e-03
+    Mechanical (External): 3.189007e-03
+    Mechanical (Internal): 4.805348e-03
+  Capacitor: 3.521028e-02
+  IGBT (DeltaT model): 7.068067e-04
+  IGBT (Arrhenius model): 1.116675e-16
+  PCB: 1.024790e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.525667e-03
+    Electrical (Internal): 4.156621e-03
+    Mechanical (External): 7.228666e-03
+    Mechanical (Internal): 1.086372e-02
+  Capacitor: 6.825197e-02
+  IGBT (DeltaT model): 1.936682e-03
+  IGBT (Arrhenius model): 2.390294e-16
+  PCB: 3.258664e-06
+
+  Stressor data saved to: results/stressor_round_4_iteration_3.csv (7657 records)
+Round 4/6 finished: 7657 cases in 45.76 s
+
+Accumulated Degradation Progress (Round 4):
+  Cooling Fan:
+    Electrical (External): 1.285533e-03
+    Electrical (Internal): 3.328596e-03
+    Mechanical (External): 3.685510e-03
+    Mechanical (Internal): 5.525900e-03
+  Capacitor: 4.489980e-02
+  IGBT (DeltaT model): 6.997457e-04
+  IGBT (Arrhenius model): 1.267464e-16
+  PCB: 2.623903e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.811200e-03
+    Electrical (Internal): 7.485217e-03
+    Mechanical (External): 1.091418e-02
+    Mechanical (Internal): 1.638962e-02
+  Capacitor: 1.131518e-01
+  IGBT (DeltaT model): 2.636428e-03
+  IGBT (Arrhenius model): 3.657758e-16
+  PCB: 5.882567e-06
+
+  Stressor data saved to: results/stressor_round_5_iteration_3.csv (7657 records)
+Round 5/6 finished: 7657 cases in 45.78 s
+
+Accumulated Degradation Progress (Round 5):
+  Cooling Fan:
+    Electrical (External): 8.816525e-04
+    Electrical (Internal): 2.395051e-03
+    Mechanical (External): 2.841698e-03
+    Mechanical (Internal): 4.298809e-03
+  Capacitor: 2.939754e-02
+  IGBT (DeltaT model): 5.516808e-04
+  IGBT (Arrhenius model): 1.052591e-16
+  PCB: 7.624311e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 3.692853e-03
+    Electrical (Internal): 9.880268e-03
+    Mechanical (External): 1.375587e-02
+    Mechanical (Internal): 2.068843e-02
+  Capacitor: 1.425493e-01
+  IGBT (DeltaT model): 3.188108e-03
+  IGBT (Arrhenius model): 4.710349e-16
+  PCB: 6.644998e-06
+
+  Stressor data saved to: results/stressor_round_6_iteration_3.csv (7660 records)
+Round 6/6 finished: 7660 cases in 46.13 s
+
+Accumulated Degradation Progress (Round 6):
+  Cooling Fan:
+    Electrical (External): 4.520397e-04
+    Electrical (Internal): 1.290574e-03
+    Mechanical (External): 1.938241e-03
+    Mechanical (Internal): 2.933848e-03
+  Capacitor: 1.839131e-02
+  IGBT (DeltaT model): 4.540570e-04
+  IGBT (Arrhenius model): 6.314007e-17
+  PCB: 2.320275e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+
+------------------------------------------------------------
+Mission Profile Iteration #3 Complete
+  Duration: 274.72 s
+------------------------------------------------------------
+
+Global Cumulative Degradation Progress (All Iterations):
+  Cooling Fan:
+    Electrical (External): 1.243468e-02
+    Electrical (Internal): 3.351252e-02
+    Mechanical (External): 4.708235e-02
+    Mechanical (Internal): 7.086684e-02
+  Capacitor: 4.828219e-01
+  IGBT (DeltaT model): 1.092650e-02
+  IGBT (Arrhenius model): 1.602525e-15
+  PCB: 2.689582e-05
+
+No component has reached degradation = 1.0 yet.
+Starting next mission profile iteration...
+
+
+============================================================
+Mission Profile Iteration #4
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_4.csv (7657 records)
+Round 1/6 finished: 7657 cases in 47.15 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_4.csv (7657 records)
+Round 2/6 finished: 7657 cases in 45.82 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.002958e-04
+    Electrical (Internal): 1.121226e-03
+    Mechanical (External): 2.366230e-03
+    Mechanical (Internal): 3.570846e-03
+  Capacitor: 2.055121e-02
+  IGBT (DeltaT model): 7.162360e-04
+  IGBT (Arrhenius model): 8.397826e-17
+  PCB: 8.246975e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.156030e-04
+    Electrical (Internal): 1.723986e-03
+    Mechanical (External): 4.039659e-03
+    Mechanical (Internal): 6.058375e-03
+  Capacitor: 3.304169e-02
+  IGBT (DeltaT model): 1.229875e-03
+  IGBT (Arrhenius model): 1.273619e-16
+  PCB: 2.233874e-06
+
+  Stressor data saved to: results/stressor_round_3_iteration_4.csv (7657 records)
+Round 3/6 finished: 7657 cases in 45.82 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.100640e-04
+    Electrical (Internal): 2.432635e-03
+    Mechanical (External): 3.189007e-03
+    Mechanical (Internal): 4.805348e-03
+  Capacitor: 3.521028e-02
+  IGBT (DeltaT model): 7.068067e-04
+  IGBT (Arrhenius model): 1.116675e-16
+  PCB: 1.024790e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.525667e-03
+    Electrical (Internal): 4.156621e-03
+    Mechanical (External): 7.228666e-03
+    Mechanical (Internal): 1.086372e-02
+  Capacitor: 6.825197e-02
+  IGBT (DeltaT model): 1.936682e-03
+  IGBT (Arrhenius model): 2.390294e-16
+  PCB: 3.258664e-06
+
+  Stressor data saved to: results/stressor_round_4_iteration_4.csv (7657 records)
+Round 4/6 finished: 7657 cases in 45.62 s
+
+Accumulated Degradation Progress (Round 4):
+  Cooling Fan:
+    Electrical (External): 1.285533e-03
+    Electrical (Internal): 3.328596e-03
+    Mechanical (External): 3.685510e-03
+    Mechanical (Internal): 5.525900e-03
+  Capacitor: 4.489980e-02
+  IGBT (DeltaT model): 6.997457e-04
+  IGBT (Arrhenius model): 1.267464e-16
+  PCB: 2.623903e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.811200e-03
+    Electrical (Internal): 7.485217e-03
+    Mechanical (External): 1.091418e-02
+    Mechanical (Internal): 1.638962e-02
+  Capacitor: 1.131518e-01
+  IGBT (DeltaT model): 2.636428e-03
+  IGBT (Arrhenius model): 3.657758e-16
+  PCB: 5.882567e-06
+
+  Stressor data saved to: results/stressor_round_5_iteration_4.csv (7657 records)
+Round 5/6 finished: 7657 cases in 45.98 s
+
+Accumulated Degradation Progress (Round 5):
+  Cooling Fan:
+    Electrical (External): 8.816525e-04
+    Electrical (Internal): 2.395051e-03
+    Mechanical (External): 2.841698e-03
+    Mechanical (Internal): 4.298809e-03
+  Capacitor: 2.939754e-02
+  IGBT (DeltaT model): 5.516808e-04
+  IGBT (Arrhenius model): 1.052591e-16
+  PCB: 7.624311e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 3.692853e-03
+    Electrical (Internal): 9.880268e-03
+    Mechanical (External): 1.375587e-02
+    Mechanical (Internal): 2.068843e-02
+  Capacitor: 1.425493e-01
+  IGBT (DeltaT model): 3.188108e-03
+  IGBT (Arrhenius model): 4.710349e-16
+  PCB: 6.644998e-06
+
+  Stressor data saved to: results/stressor_round_6_iteration_4.csv (7660 records)
+Round 6/6 finished: 7660 cases in 45.97 s
+
+Accumulated Degradation Progress (Round 6):
+  Cooling Fan:
+    Electrical (External): 4.520397e-04
+    Electrical (Internal): 1.290574e-03
+    Mechanical (External): 1.938241e-03
+    Mechanical (Internal): 2.933848e-03
+  Capacitor: 1.839131e-02
+  IGBT (DeltaT model): 4.540570e-04
+  IGBT (Arrhenius model): 6.314007e-17
+  PCB: 2.320275e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+
+------------------------------------------------------------
+Mission Profile Iteration #4 Complete
+  Duration: 276.39 s
+------------------------------------------------------------
+
+Global Cumulative Degradation Progress (All Iterations):
+  Cooling Fan:
+    Electrical (External): 1.657957e-02
+    Electrical (Internal): 4.468337e-02
+    Mechanical (External): 6.277646e-02
+    Mechanical (Internal): 9.448912e-02
+  Capacitor: 6.437625e-01
+  IGBT (DeltaT model): 1.456866e-02
+  IGBT (Arrhenius model): 2.136700e-15
+  PCB: 3.586109e-05
+
+No component has reached degradation = 1.0 yet.
+Starting next mission profile iteration...
+
+
+============================================================
+Mission Profile Iteration #5
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_5.csv (7657 records)
+Round 1/6 finished: 7657 cases in 45.68 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_5.csv (7657 records)
+Round 2/6 finished: 7657 cases in 45.68 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.002958e-04
+    Electrical (Internal): 1.121226e-03
+    Mechanical (External): 2.366230e-03
+    Mechanical (Internal): 3.570846e-03
+  Capacitor: 2.055121e-02
+  IGBT (DeltaT model): 7.162360e-04
+  IGBT (Arrhenius model): 8.397826e-17
+  PCB: 8.246975e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.156030e-04
+    Electrical (Internal): 1.723986e-03
+    Mechanical (External): 4.039659e-03
+    Mechanical (Internal): 6.058375e-03
+  Capacitor: 3.304169e-02
+  IGBT (DeltaT model): 1.229875e-03
+  IGBT (Arrhenius model): 1.273619e-16
+  PCB: 2.233874e-06
+
+  Stressor data saved to: results/stressor_round_3_iteration_5.csv (7657 records)
+Round 3/6 finished: 7657 cases in 45.70 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.100640e-04
+    Electrical (Internal): 2.432635e-03
+    Mechanical (External): 3.189007e-03
+    Mechanical (Internal): 4.805348e-03
+  Capacitor: 3.521028e-02
+  IGBT (DeltaT model): 7.068067e-04
+  IGBT (Arrhenius model): 1.116675e-16
+  PCB: 1.024790e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.525667e-03
+    Electrical (Internal): 4.156621e-03
+    Mechanical (External): 7.228666e-03
+    Mechanical (Internal): 1.086372e-02
+  Capacitor: 6.825197e-02
+  IGBT (DeltaT model): 1.936682e-03
+  IGBT (Arrhenius model): 2.390294e-16
+  PCB: 3.258664e-06
+
+  Stressor data saved to: results/stressor_round_4_iteration_5.csv (7657 records)
+Round 4/6 finished: 7657 cases in 46.69 s
+
+Accumulated Degradation Progress (Round 4):
+  Cooling Fan:
+    Electrical (External): 1.285533e-03
+    Electrical (Internal): 3.328596e-03
+    Mechanical (External): 3.685510e-03
+    Mechanical (Internal): 5.525900e-03
+  Capacitor: 4.489980e-02
+  IGBT (DeltaT model): 6.997457e-04
+  IGBT (Arrhenius model): 1.267464e-16
+  PCB: 2.623903e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.811200e-03
+    Electrical (Internal): 7.485217e-03
+    Mechanical (External): 1.091418e-02
+    Mechanical (Internal): 1.638962e-02
+  Capacitor: 1.131518e-01
+  IGBT (DeltaT model): 2.636428e-03
+  IGBT (Arrhenius model): 3.657758e-16
+  PCB: 5.882567e-06
+
+  Stressor data saved to: results/stressor_round_5_iteration_5.csv (7657 records)
+Round 5/6 finished: 7657 cases in 46.34 s
+
+Accumulated Degradation Progress (Round 5):
+  Cooling Fan:
+    Electrical (External): 8.816525e-04
+    Electrical (Internal): 2.395051e-03
+    Mechanical (External): 2.841698e-03
+    Mechanical (Internal): 4.298809e-03
+  Capacitor: 2.939754e-02
+  IGBT (DeltaT model): 5.516808e-04
+  IGBT (Arrhenius model): 1.052591e-16
+  PCB: 7.624311e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 3.692853e-03
+    Electrical (Internal): 9.880268e-03
+    Mechanical (External): 1.375587e-02
+    Mechanical (Internal): 2.068843e-02
+  Capacitor: 1.425493e-01
+  IGBT (DeltaT model): 3.188108e-03
+  IGBT (Arrhenius model): 4.710349e-16
+  PCB: 6.644998e-06
+
+  Stressor data saved to: results/stressor_round_6_iteration_5.csv (7660 records)
+Round 6/6 finished: 7660 cases in 45.83 s
+
+Accumulated Degradation Progress (Round 6):
+  Cooling Fan:
+    Electrical (External): 4.520397e-04
+    Electrical (Internal): 1.290574e-03
+    Mechanical (External): 1.938241e-03
+    Mechanical (Internal): 2.933848e-03
+  Capacitor: 1.839131e-02
+  IGBT (DeltaT model): 4.540570e-04
+  IGBT (Arrhenius model): 6.314007e-17
+  PCB: 2.320275e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+
+------------------------------------------------------------
+Mission Profile Iteration #5 Complete
+  Duration: 275.95 s
+------------------------------------------------------------
+
+Global Cumulative Degradation Progress (All Iterations):
+  Cooling Fan:
+    Electrical (External): 2.072446e-02
+    Electrical (Internal): 5.585421e-02
+    Mechanical (External): 7.847058e-02
+    Mechanical (Internal): 1.181114e-01
+  Capacitor: 8.047031e-01
+  IGBT (DeltaT model): 1.821083e-02
+  IGBT (Arrhenius model): 2.670875e-15
+  PCB: 4.482636e-05
+
+No component has reached degradation = 1.0 yet.
+Starting next mission profile iteration...
+
+
+============================================================
+Mission Profile Iteration #6
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_6.csv (7657 records)
+Round 1/6 finished: 7657 cases in 45.73 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_6.csv (7657 records)
+Round 2/6 finished: 7657 cases in 45.71 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.002958e-04
+    Electrical (Internal): 1.121226e-03
+    Mechanical (External): 2.366230e-03
+    Mechanical (Internal): 3.570846e-03
+  Capacitor: 2.055121e-02
+  IGBT (DeltaT model): 7.162360e-04
+  IGBT (Arrhenius model): 8.397826e-17
+  PCB: 8.246975e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.156030e-04
+    Electrical (Internal): 1.723986e-03
+    Mechanical (External): 4.039659e-03
+    Mechanical (Internal): 6.058375e-03
+  Capacitor: 3.304169e-02
+  IGBT (DeltaT model): 1.229875e-03
+  IGBT (Arrhenius model): 1.273619e-16
+  PCB: 2.233874e-06
+
+  Stressor data saved to: results/stressor_round_3_iteration_6.csv (7657 records)
+Round 3/6 finished: 7657 cases in 45.61 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.100640e-04
+    Electrical (Internal): 2.432635e-03
+    Mechanical (External): 3.189007e-03
+    Mechanical (Internal): 4.805348e-03
+  Capacitor: 3.521028e-02
+  IGBT (DeltaT model): 7.068067e-04
+  IGBT (Arrhenius model): 1.116675e-16
+  PCB: 1.024790e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.525667e-03
+    Electrical (Internal): 4.156621e-03
+    Mechanical (External): 7.228666e-03
+    Mechanical (Internal): 1.086372e-02
+  Capacitor: 6.825197e-02
+  IGBT (DeltaT model): 1.936682e-03
+  IGBT (Arrhenius model): 2.390294e-16
+  PCB: 3.258664e-06
+
+  Stressor data saved to: results/stressor_round_4_iteration_6.csv (7657 records)
+Round 4/6 finished: 7657 cases in 45.70 s
+
+Accumulated Degradation Progress (Round 4):
+  Cooling Fan:
+    Electrical (External): 1.285533e-03
+    Electrical (Internal): 3.328596e-03
+    Mechanical (External): 3.685510e-03
+    Mechanical (Internal): 5.525900e-03
+  Capacitor: 4.489980e-02
+  IGBT (DeltaT model): 6.997457e-04
+  IGBT (Arrhenius model): 1.267464e-16
+  PCB: 2.623903e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.811200e-03
+    Electrical (Internal): 7.485217e-03
+    Mechanical (External): 1.091418e-02
+    Mechanical (Internal): 1.638962e-02
+  Capacitor: 1.131518e-01
+  IGBT (DeltaT model): 2.636428e-03
+  IGBT (Arrhenius model): 3.657758e-16
+  PCB: 5.882567e-06
+
+  Stressor data saved to: results/stressor_round_5_iteration_6.csv (7657 records)
+Round 5/6 finished: 7657 cases in 45.64 s
+
+Accumulated Degradation Progress (Round 5):
+  Cooling Fan:
+    Electrical (External): 8.816525e-04
+    Electrical (Internal): 2.395051e-03
+    Mechanical (External): 2.841698e-03
+    Mechanical (Internal): 4.298809e-03
+  Capacitor: 2.939754e-02
+  IGBT (DeltaT model): 5.516808e-04
+  IGBT (Arrhenius model): 1.052591e-16
+  PCB: 7.624311e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 3.692853e-03
+    Electrical (Internal): 9.880268e-03
+    Mechanical (External): 1.375587e-02
+    Mechanical (Internal): 2.068843e-02
+  Capacitor: 1.425493e-01
+  IGBT (DeltaT model): 3.188108e-03
+  IGBT (Arrhenius model): 4.710349e-16
+  PCB: 6.644998e-06
+
+  Stressor data saved to: results/stressor_round_6_iteration_6.csv (7660 records)
+Round 6/6 finished: 7660 cases in 45.87 s
+
+Accumulated Degradation Progress (Round 6):
+  Cooling Fan:
+    Electrical (External): 4.520397e-04
+    Electrical (Internal): 1.290574e-03
+    Mechanical (External): 1.938241e-03
+    Mechanical (Internal): 2.933848e-03
+  Capacitor: 1.839131e-02
+  IGBT (DeltaT model): 4.540570e-04
+  IGBT (Arrhenius model): 6.314007e-17
+  PCB: 2.320275e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+
+------------------------------------------------------------
+Mission Profile Iteration #6 Complete
+  Duration: 274.27 s
+------------------------------------------------------------
+
+Global Cumulative Degradation Progress (All Iterations):
+  Cooling Fan:
+    Electrical (External): 2.486936e-02
+    Electrical (Internal): 6.702505e-02
+    Mechanical (External): 9.416469e-02
+    Mechanical (Internal): 1.417337e-01
+  Capacitor: 9.656437e-01
+  IGBT (DeltaT model): 2.185299e-02
+  IGBT (Arrhenius model): 3.205050e-15
+  PCB: 5.379164e-05
+
+No component has reached degradation = 1.0 yet.
+Starting next mission profile iteration...
+
+
+============================================================
+Mission Profile Iteration #7
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_7.csv (7657 records)
+Round 1/6 finished: 7657 cases in 46.21 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.153072e-04
+    Electrical (Internal): 6.027604e-04
+    Mechanical (External): 1.673429e-03
+    Mechanical (Internal): 2.487529e-03
+  Capacitor: 1.249048e-02
+  IGBT (DeltaT model): 5.136392e-04
+  IGBT (Arrhenius model): 4.338363e-17
+  PCB: 1.409177e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_7.csv (7657 records)
+Round 2/6 finished: 7657 cases in 46.93 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.002958e-04
+    Electrical (Internal): 1.121226e-03
+    Mechanical (External): 2.366230e-03
+    Mechanical (Internal): 3.570846e-03
+  Capacitor: 2.055121e-02
+  IGBT (DeltaT model): 7.162360e-04
+  IGBT (Arrhenius model): 8.397826e-17
+  PCB: 8.246975e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.156030e-04
+    Electrical (Internal): 1.723986e-03
+    Mechanical (External): 4.039659e-03
+    Mechanical (Internal): 6.058375e-03
+  Capacitor: 3.304169e-02
+  IGBT (DeltaT model): 1.229875e-03
+  IGBT (Arrhenius model): 1.273619e-16
+  PCB: 2.233874e-06
+
+  Stressor data saved to: results/stressor_round_3_iteration_7.csv (7657 records)
+Round 3/6 finished: 7657 cases in 45.80 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.100640e-04
+    Electrical (Internal): 2.432635e-03
+    Mechanical (External): 3.189007e-03
+    Mechanical (Internal): 4.805348e-03
+  Capacitor: 3.521028e-02
+  IGBT (DeltaT model): 7.068067e-04
+  IGBT (Arrhenius model): 1.116675e-16
+  PCB: 1.024790e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.525667e-03
+    Electrical (Internal): 4.156621e-03
+    Mechanical (External): 7.228666e-03
+    Mechanical (Internal): 1.086372e-02
+  Capacitor: 6.825197e-02
+  IGBT (DeltaT model): 1.936682e-03
+  IGBT (Arrhenius model): 2.390294e-16
+  PCB: 3.258664e-06
+
+  Stressor data saved to: results/stressor_round_4_iteration_7.csv (7657 records)
+Round 4/6 finished: 7657 cases in 45.90 s
+
+Accumulated Degradation Progress (Round 4):
+  Cooling Fan:
+    Electrical (External): 1.285533e-03
+    Electrical (Internal): 3.328596e-03
+    Mechanical (External): 3.685510e-03
+    Mechanical (Internal): 5.525900e-03
+  Capacitor: 4.489980e-02
+  IGBT (DeltaT model): 6.997457e-04
+  IGBT (Arrhenius model): 1.267464e-16
+  PCB: 2.623903e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.811200e-03
+    Electrical (Internal): 7.485217e-03
+    Mechanical (External): 1.091418e-02
+    Mechanical (Internal): 1.638962e-02
+  Capacitor: 1.131518e-01
+  IGBT (DeltaT model): 2.636428e-03
+  IGBT (Arrhenius model): 3.657758e-16
+  PCB: 5.882567e-06
+
+  Stressor data saved to: results/stressor_round_5_iteration_7.csv (7657 records)
+Round 5/6 finished: 7657 cases in 45.90 s
+
+Accumulated Degradation Progress (Round 5):
+  Cooling Fan:
+    Electrical (External): 8.816525e-04
+    Electrical (Internal): 2.395051e-03
+    Mechanical (External): 2.841698e-03
+    Mechanical (Internal): 4.298809e-03
+  Capacitor: 2.939754e-02
+  IGBT (DeltaT model): 5.516808e-04
+  IGBT (Arrhenius model): 1.052591e-16
+  PCB: 7.624311e-07
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 3.692853e-03
+    Electrical (Internal): 9.880268e-03
+    Mechanical (External): 1.375587e-02
+    Mechanical (Internal): 2.068843e-02
+  Capacitor: 1.425493e-01
+  IGBT (DeltaT model): 3.188108e-03
+  IGBT (Arrhenius model): 4.710349e-16
+  PCB: 6.644998e-06
+
+  Stressor data saved to: results/stressor_round_6_iteration_7.csv (7660 records)
+Round 6/6 finished: 7660 cases in 45.66 s
+
+Accumulated Degradation Progress (Round 6):
+  Cooling Fan:
+    Electrical (External): 4.520397e-04
+    Electrical (Internal): 1.290574e-03
+    Mechanical (External): 1.938241e-03
+    Mechanical (Internal): 2.933848e-03
+  Capacitor: 1.839131e-02
+  IGBT (DeltaT model): 4.540570e-04
+  IGBT (Arrhenius model): 6.314007e-17
+  PCB: 2.320275e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 4.144893e-03
+    Electrical (Internal): 1.117084e-02
+    Mechanical (External): 1.569412e-02
+    Mechanical (Internal): 2.362228e-02
+  Capacitor: 1.609406e-01
+  IGBT (DeltaT model): 3.642165e-03
+  IGBT (Arrhenius model): 5.341749e-16
+  PCB: 8.965273e-06
+
+
+------------------------------------------------------------
+Mission Profile Iteration #7 Complete
+  Duration: 276.42 s
+------------------------------------------------------------
+
+Global Cumulative Degradation Progress (All Iterations):
+  Cooling Fan:
+    Electrical (External): 2.901425e-02
+    Electrical (Internal): 7.819589e-02
+    Mechanical (External): 1.098588e-01
+    Mechanical (Internal): 1.653560e-01
+  Capacitor: 1.126584e+00 [FAILED - Reached 1.0]
+  IGBT (DeltaT model): 2.549516e-02
+  IGBT (Arrhenius model): 3.739225e-15
+  PCB: 6.275691e-05
+
+
+============================================================
+FAILURE DETECTED: Capacitor reached degradation = 1.0
+============================================================
+
+============================================================
+DEGRADATION LIMIT REACHED
+============================================================
+Failed Component: Capacitor
+Total Mission Profile Iterations: 7
+Total Rounds: 42
+============================================================
+
+Simulation Complete
+  Total Cases per Iteration: 45945
+  Total Mission Profile Iterations: 7
+  Total Rounds: 42
+  Execution Time (Wall Clock): 1929.15 s
+  Simulation Time per GPU:
+    GPU 0: 1511.15 s
+    GPU 1: 1630.47 s
+  Average Time per Case: 0.0060 s
+  Speedup: 1.63x

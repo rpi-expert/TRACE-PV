@@ -1,0 +1,116 @@
+DEBUG: IGBT Power Module Coefficients:
+  DeltaT Model:
+    A: 30000
+    n: 3.476
+    Ea: 0.042 eV
+  Arrhenius Model:
+    A: 259.693
+    n1: 2.66
+    n2: 2.2
+    Ea: 0.79 eV
+    RH_ref: 95 %
+    T_ref: 348.15 K
+    V_ref: 800 V
+DEBUG: Capacitor loss calculation:
+  I_cap_rms: 95.7619 A
+  ESR: 0.00045071 Ohm
+  Capacitor loss: 4.13316 W
+DEBUG: Capacitor thermal model inputs:
+  Capacitor loss: 4.13316 W
+  Internal temp: 12.2824 C
+  rth_amb: 16.6783 K/W
+  rth_surf: 8.3391 K/W
+DEBUG: IGBT thermal model output:
+  AC power (calculated): 58955.7 W
+  Ambient temp: 2.09 C
+  Junction temp: 110.175 C
+DEBUG: Capacitor loaded successfully:
+  Part number: Rubycon_475VXG330MEFCSN30X55
+  Type: ALUMINUM_ELECTROLYTIC
+  Voltage type: DC
+  Batch size: 552
+  First voltage: 1000 V
+  First hotspot temp: 81.2165 C
+  First internal RH: 92.9384 %
+  L0: 4993
+  V0: 475
+  T0: 105
+  beta_min: 3
+  beta_max: 5
+  Batch capacitor stressor: 0.00748861
+DEBUG: IGBT Reliability Analysis:
+  Accumulated junction temps: 3864 points
+  Junction temp range: [35.4145, 158.009] C
+DEBUG: IGBT Rainflow Counting Results:
+  Tj_max: 158.009 C
+  Number of cycles: 80
+  First few cycles:
+    Cycle 0: deltaT=10.3891 C, cycles=1
+    Cycle 1: deltaT=1.2572 C, cycles=1
+    Cycle 2: deltaT=1.29622 C, cycles=1
+    Cycle 3: deltaT=1.03728 C, cycles=1
+    Cycle 4: deltaT=1.67864 C, cycles=1
+DEBUG: IGBT DeltaT Model Calculation (Cycle 0):
+  deltaT: 10.3891 C
+  Tj_begin: 129.464 C
+  Tj_end: 119.075 C
+  Tj_max: 129.464 C
+  cycles: 1
+  Nf: 3.43948e+08
+  stressor (cycles/Nf): 2.90742e-09
+DEBUG: IGBT DeltaT Model Calculation (Cycle 1):
+  deltaT: 1.2572 C
+  Tj_begin: 140.651 C
+  Tj_end: 139.393 C
+  Tj_max: 140.651 C
+  cycles: 1
+  Nf: 215862
+  stressor (cycles/Nf): 4.63258e-06
+DEBUG: IGBT DeltaT Model Calculation (Cycle 2):
+  deltaT: 1.29622 C
+  Tj_begin: 144.911 C
+  Tj_end: 143.615 C
+  Tj_max: 144.911 C
+  cycles: 1
+  Nf: 237193
+  stressor (cycles/Nf): 4.21597e-06
+DEBUG: IGBT DeltaT Model Calculation (Cycle 3):
+  deltaT: 1.03728 C
+  Tj_begin: 142.843 C
+  Tj_end: 141.805 C
+  Tj_max: 142.843 C
+  cycles: 1
+  Nf: 109952
+  stressor (cycles/Nf): 9.09488e-06
+DEBUG: IGBT DeltaT Model Calculation (Cycle 4):
+  deltaT: 1.67864 C
+  Tj_begin: 120.78 C
+  Tj_end: 122.458 C
+  Tj_max: 122.458 C
+  cycles: 1
+  Nf: 622482
+  stressor (cycles/Nf): 1.60647e-06
+DEBUG: IGBT Arrhenius Model Calculation (Interval 0):
+  Tj: 110.175 C
+  Lifetime: 4.7129e+19 hours
+  Stressor (5 min / lifetime*60): 1.7682e-21
+DEBUG: IGBT Arrhenius Model Calculation (Interval 1):
+  Tj: 110.117 C
+  Lifetime: 4.72827e+19 hours
+  Stressor (5 min / lifetime*60): 1.76245e-21
+DEBUG: IGBT Arrhenius Model Calculation (Interval 2):
+  Tj: 110.109 C
+  Lifetime: 4.7303e+19 hours
+  Stressor (5 min / lifetime*60): 1.76169e-21
+DEBUG: IGBT Arrhenius Model Calculation (Interval 3):
+  Tj: 110.112 C
+  Lifetime: 4.72955e+19 hours
+  Stressor (5 min / lifetime*60): 1.76197e-21
+DEBUG: IGBT Arrhenius Model Calculation (Interval 4):
+  Tj: 110.023 C
+  Lifetime: 4.75283e+19 hours
+  Stressor (5 min / lifetime*60): 1.75334e-21
+DEBUG: Checking degradation thresholds:
+  global_igbt_stressor_deltaT: 0.00364217
+  global_igbt_stressor_arrhenius: 5.34175e-16
+DEBUG: Degradation reached - Capacitor

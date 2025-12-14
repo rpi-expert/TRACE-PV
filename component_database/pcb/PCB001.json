@@ -1,0 +1,44 @@
+{
+  "part_number": "PCB001",
+  "component_type": "MELF",
+  "material": "Leadless SAC",
+  "component_dimensions": {
+    "length_min": 5.9,
+    "width_min": 2.2,
+    "thickness_min": 2.0
+  },
+  "copper_dimensions": {
+    "length": 1.7,
+    "width": 2.4,
+    "thickness": 0.035
+  },
+  "solder_joint_dimensions": {
+    "length": 1.5,
+    "width": 2.4,
+    "thickness": 0.06
+  },
+  "ductility_coefficient": {
+    "A":-0.347,
+    "B":-0.00174, 
+    "C":0.00783,
+    "D":360,
+    "E":0.290
+  },
+  "shear_modulus": 50000,
+  "CTE_component_para": 7.1e-6,
+  "G_cooper": 44117,
+  "G_FR4": 7200,
+  "CTE_FR4":0.00001755066,
+  "C_FR4": 17000,
+  "Poisson_FR4": 0.18,
+  "pcb_thickness": 1.57,
+  "max_temperature": 145,
+  "min_temperature": 60,
+  "dewll_time": 5,
+  "ramp_time": 7,
+  "beta":3.82,
+  "lifetime@N63": 3710,
+  "adjust_param":113.5596,
+  "description": "MELF PCB"
+}
+
