@@ -566,6 +566,17 @@ int main(int argc, char** argv) {
         bool degradation_reached = false;
         std::string failed_component = "";
         
+        // Storage for electrical simulation results from first iteration
+        // Used to skip electrical simulation in subsequent iterations (when iteration <= 10)
+        struct StoredElectricalResults {
+            double I_cap_rms;
+            std::vector<double> V_ce;
+            std::vector<double> I_c;
+            double ac_power;
+        };
+        std::vector<StoredElectricalResults> stored_electrical_results(total_cases);
+        bool electrical_results_stored = false;
+        
         std::cout << "\n========================================" << std::endl;
         std::cout << "Starting Degradation Tracking Simulation" << std::endl;
         std::cout << "Will run mission profile repeatedly until one component reaches degradation = 1.0" << std::endl;
@@ -576,6 +587,20 @@ int main(int argc, char** argv) {
             std::cout << "\n" << std::string(60, '=') << std::endl;
             std::cout << "Mission Profile Iteration #" << mission_profile_iteration << std::endl;
             std::cout << std::string(60, '=') << std::endl;
+            
+            // Check if electrical simulation can be skipped
+            // Skip if iteration > 1 (we have stored results from first iteration) AND iteration <= 10
+            bool skip_electrical_simulation = false;
+            if (mission_profile_iteration > 1 && mission_profile_iteration <= 10 && electrical_results_stored) {
+                skip_electrical_simulation = true;
+                std::cout << "Skipping electrical simulation (iteration " << mission_profile_iteration 
+                          << " <= 10, using stored results from first iteration)" << std::endl;
+            } else if (mission_profile_iteration > 1 && mission_profile_iteration <= 10 && !electrical_results_stored) {
+                std::cout << "Warning: Cannot skip electrical simulation - results not stored yet. Running simulation." << std::endl;
+            } else if (mission_profile_iteration > 10) {
+                std::cout << "Running electrical simulation (iteration " << mission_profile_iteration 
+                          << " > 10, skipping not allowed)" << std::endl;
+            }
             
             // Reset case index for this mission profile iteration
             int case_index = 0;
@@ -710,8 +735,16 @@ int main(int argc, char** argv) {
                                 params_batch.push_back(params);
                             }
                             
-                            // Process batch of cases together on this GPU
-                            BatchOutputs batch_outputs = run_unified_gpu_batch(params_batch);
+                            // Process batch of cases together on this GPU (or skip if using stored results)
+                            BatchOutputs batch_outputs;
+                            if (!skip_electrical_simulation) {
+                                // Run electrical simulation
+                                batch_outputs = run_unified_gpu_batch(params_batch);
+                            } else {
+                                // Skip electrical simulation - create empty batch_outputs structure
+                                batch_outputs.outputs.resize(params_batch.size());
+                                batch_outputs.elapsed_s = 0.0;
+                            }
                             
                             // Collect thermal data for batch reliability assessment
                             std::vector<double> batch_ambient_temps;
@@ -762,7 +795,6 @@ int main(int argc, char** argv) {
                             
                             // Process stress calculation, loss model, and thermal model for each case
                             for (size_t case_idx = 0; case_idx < batch_outputs.outputs.size(); ++case_idx) {
-                                const UnifiedOutputs& outputs = batch_outputs.outputs[case_idx];
                                 const SimulationParameters& params = params_batch[case_idx];
                                 
                                 // Get the corresponding simulation case for ambient conditions
@@ -770,11 +802,55 @@ int main(int argc, char** argv) {
                                 const SimulationCase& sc = all_cases[actual_case_idx];
                                 
                                 // Calculate stress waveforms (V_ce, I_c, I_cap) - includes RMS calculation
-                                StressResults stress = calculate_stress(outputs, params);
+                                // OR use stored results if skipping electrical simulation
+                                StressResults stress;
+                                double ac_power;
                                 
-                                // Calculate AC power from I2 (grid-side inductor currents) and Vc (filter capacitor voltages)
-                                ACPowerResults ac_power_results = calculate_ac_power(outputs, params);
-                                double ac_power = calculate_equivalent_ac_power(ac_power_results.p_AC_instantaneous);
+                                if (skip_electrical_simulation) {
+                                    // Use stored electrical simulation results
+                                    if (actual_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                        const StoredElectricalResults& stored = stored_electrical_results[actual_case_idx];
+                                        stress.I_cap_rms = stored.I_cap_rms;
+                                        stress.V_ce = stored.V_ce;
+                                        stress.I_c = stored.I_c;
+                                        // I_cap vector not needed for loss/thermal models, but initialize empty for consistency
+                                        stress.I_cap.clear();
+                                        ac_power = stored.ac_power;
+                                    } else {
+                                        std::cerr << "Warning: Case index " << actual_case_idx 
+                                                  << " out of range for stored results. Using zero values." << std::endl;
+                                        stress.I_cap_rms = 0.0;
+                                        stress.V_ce.clear();
+                                        stress.I_c.clear();
+                                        stress.I_cap.clear();
+                                        ac_power = 0.0;
+                                    }
+                                } else {
+                                    // Run electrical simulation and calculate stress
+                                    const UnifiedOutputs& outputs = batch_outputs.outputs[case_idx];
+                                    stress = calculate_stress(outputs, params);
+                                    
+                                    // Calculate AC power from I2 (grid-side inductor currents) and Vc (filter capacitor voltages)
+                                    ACPowerResults ac_power_results = calculate_ac_power(outputs, params);
+                                    ac_power = calculate_equivalent_ac_power(ac_power_results.p_AC_instantaneous);
+                                    
+                                    // Store results after first iteration, or update results when iteration > 10
+                                    if (actual_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                        if (mission_profile_iteration == 1) {
+                                            // Store results after first iteration
+                                            stored_electrical_results[actual_case_idx].I_cap_rms = stress.I_cap_rms;
+                                            stored_electrical_results[actual_case_idx].V_ce = stress.V_ce;
+                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
+                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
+                                        } else if (mission_profile_iteration > 10) {
+                                            // Update stored results when iteration > 10 (used for next iteration)
+                                            stored_electrical_results[actual_case_idx].I_cap_rms = stress.I_cap_rms;
+                                            stored_electrical_results[actual_case_idx].V_ce = stress.V_ce;
+                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
+                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
+                                        }
+                                    }
+                                }
                                 
                                 // Calculate losses from stress waveforms
                                 // 2.1 Capacitor loss model: input I_cap_rms and ESR, output capacitor loss
@@ -1551,6 +1627,12 @@ int main(int argc, char** argv) {
             total_simulation_time += iteration_simulation_time;
             for (int i = 0; i < num_gpus; ++i) {
                 gpu_simulation_times[i] += iteration_gpu_simulation_times[i];
+            }
+            
+            // Mark electrical results as stored after first iteration completes
+            if (mission_profile_iteration == 1 && !skip_electrical_simulation) {
+                electrical_results_stored = true;
+                std::cout << "Electrical simulation results stored for reuse in subsequent iterations (when iteration <= 10)" << std::endl;
             }
             
             const auto iteration_end = std::chrono::steady_clock::now();
