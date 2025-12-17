@@ -3,4 +3,4 @@ Progress:
 - [x] Mission Profile (Operating)
 - [x] PV Inverter Database
 - [x] PV Panel Database
-- [] Control Database
+- [ ] Control Database
