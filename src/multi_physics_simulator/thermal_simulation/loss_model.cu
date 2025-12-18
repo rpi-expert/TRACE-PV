@@ -5,6 +5,8 @@
 
 // Device function to calculate capacitor losses from RMS current and ESR
 // Power loss = I_rms^2 * ESR
+// Note: ESR should already account for topology (doubled for 3-level topology where two capacitors are in series)
+// For 3-level: ESR_total = ESR1 + ESR2 = 2 * ESR (if capacitors are identical)
 __device__ double calculate_capacitor_loss_device(double I_cap_rms, double esr) {
     if (I_cap_rms < 0.0 || esr < 0.0) {
         return 0.0;

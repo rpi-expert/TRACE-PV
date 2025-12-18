@@ -35,36 +35,40 @@ SimulationParameters initialise_defaults(int topology_level,
     constexpr double FUNDAMENTAL_FREQ = 60.0;
     params.simulation_time = 1.0 / FUNDAMENTAL_FREQ;
     
-    // Default values for parameters not in profiles (will be overridden if loading from database)
-    params.switching_frequency = 16000.0; // 16 kHz across MATLAB scripts
-    params.switching_period = 1.0 / params.switching_frequency;
+    // Parameters that should come from PV inverter database (via create_parameters_from_database)
+    // These are initialized to 0 to ensure they must be loaded from database
+    params.switching_frequency = 0.0;  // Must come from PV inverter database
+    params.switching_period = 0.0;     // Calculated from switching_frequency
     params.avg_points_per_period = static_cast<int>(BASE_AVG_POINTS);
     params.a2s_points_per_interval = static_cast<int>(BASE_A2S_POINTS);
 
     params.v_pv = 1000.0;  // Default, should come from PV panel profile in future
-    params.vdc_target = 1000.0;  // Default
-    params.boost_duty = (model_stage == 2) ? (1.0 - params.v_pv / params.vdc_target) : 0.0;
+    params.vdc_target = 0.0;  // Must come from PV inverter database
+    params.boost_duty = 0.0;  // Calculated from v_pv and vdc_target
 
-    params.vg_mag = 480.0 * std::sqrt(2.0) / std::sqrt(3.0);
-    params.vg_freq = 60.0;
-    params.vg_phase = 0.0;
+    // Parameters that should come from grid database (via create_parameters_from_database)
+    params.vg_mag = 0.0;  // Must come from grid database
+    params.vg_freq = 0.0;  // Must come from grid database
+    params.vg_phase = 0.0;  // Must come from grid database
 
-    params.reference_phase_magnitude = 285.7229 * std::sqrt(2.0);
-    params.reference_frequency = 60.0;
-    params.reference_phase_shift = 0.1974; // radians
+    params.reference_phase_magnitude = 0.0;  // Must come from grid database
+    params.reference_frequency = 0.0;  // Must come from grid database
+    params.reference_phase_shift = 0.0;  // Must come from grid database
 
-    params.L1 = 3.0e-4;
-    params.RL1 = 0.03;
-    params.C = 9.7860e-05;
-    params.RC = 1.0;  // Not in profile, keep default
-    params.L2 = 9.3183e-04;
-    params.RL2 = 0.0053;
+    // LCL filter parameters - must come from PV inverter database
+    params.L1 = 0.0;   // Must come from PV inverter database
+    params.RL1 = 0.0;  // Must come from PV inverter database
+    params.C = 0.0;    // Must come from PV inverter database
+    params.RC = 1.0;   // Not in profile, keep default
+    params.L2 = 0.0;   // Must come from PV inverter database
+    params.RL2 = 0.0;  // Must come from PV inverter database
 
-    params.Lboost = (model_stage == 2) ? 5.0e-4 : 0.0;
-    params.RLboost = (model_stage == 2) ? 0.005 : 0.0;
-    params.CDC = (model_stage == 2 && topology_level == 2) ? 10351e-6 : 0.0;
-    params.CDC1 = (model_stage == 2 && topology_level == 3) ? 10351e-6 : 0.0;
-    params.CDC2 = (model_stage == 2 && topology_level == 3) ? 10351e-6 : 0.0;
+    // Boost stage parameters - must come from PV inverter database
+    params.Lboost = 0.0;   // Must come from PV inverter database
+    params.RLboost = 0.0;  // Must come from PV inverter database
+    params.CDC = 0.0;      // Calculated from CDC1 (from PV inverter database)
+    params.CDC1 = 0.0;     // Must come from PV inverter database
+    params.CDC2 = 0.0;     // Must come from PV inverter database
 
     if (topology_level == 2 && model_stage == 1) {
         params.num_states = 9;
@@ -131,9 +135,9 @@ SimulationParameters create_parameters_from_database(
     params.CDC1 = inverter_params.CDC1;
     params.CDC2 = inverter_params.CDC2;
     
-    // Calculate CDC for 2-level (not in profile, calculate from CDC1 if available)
+    // Calculate CDC for 2-level (calculated from CDC1 from database)
     if (params.topology_level == 2 && params.model_stage == 2) {
-        params.CDC = (inverter_params.CDC1 > 0.0) ? inverter_params.CDC1 : 10351e-6;
+        params.CDC = (inverter_params.CDC1 > 0.0) ? inverter_params.CDC1 : 0.0;
     } else {
         params.CDC = 0.0;
     }

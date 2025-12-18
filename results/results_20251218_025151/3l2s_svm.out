@@ -1,0 +1,143 @@
+Simulation Model Loaded:
+  Capacitor: Rubycon_475VXG330MEFCSN30X55
+  Power Module: F3L75R12W1H3_B11
+  Fan Cooling: NMB 09238RE-24N-GU
+  PCB: PCB001
+  PV Panel: CS6U-330P
+
+Component model parameters can be retrieved from database:
+  ✓ Capacitor Rubycon_475VXG330MEFCSN30X55 loaded (type: ALUMINUM_ELECTROLYTIC, voltage: DC)
+  ✓ Power Module F3L75R12W1H3_B11 loaded
+  ✓ Fan Cooling NMB 09238RE-24N-GU loaded
+  ✓ PCB PCB001 loaded
+
+Mission Profile Loaded: 47680 cases (after filtering GHI > 0 and ac_voltage > 0)
+
+Warning: No IV curve simulator available. Using simple PV voltage model.
+GPU Configuration:
+  Available GPUs: 2
+  GPUs to use: 2
+  GPU 0: NVIDIA RTX A4000
+    Compute Capability: 8.6
+    Multiprocessors: 48
+    Threads: 73728 (48 MPs * 1536 threads/MP)
+    Memory: 15.60 GB
+  GPU 1: NVIDIA RTX A4000
+    Compute Capability: 8.6
+    Multiprocessors: 48
+    Threads: 73728 (48 MPs * 1536 threads/MP)
+    Memory: 15.59 GB
+
+Aggregated Capacity (all GPUs):
+  Total Multiprocessors: 96
+  Total Threads: 147456
+  Total Memory: 31.19 GB
+
+Batch Size Calculation:
+  Total GPUs: 2
+  GPU 0 Threads: 73728 threads
+    (48 MPs * 1536 threads/MP)
+  GPU 1 Threads: 73728 threads
+    (48 MPs * 1536 threads/MP)
+  Total Threads (all GPUs): 147456 threads
+  Switching Periods per Fundamental: 266.67 periods
+    (switching_freq/fundamental_freq = 16000.00/60.00 = 266.67)
+  Fundamental Cycle Size: 21334 samples
+    (samples per switching period = 8 intervals * 10 samples = 80 samples)
+  Batch Size (threads): 552 cases
+    (total_threads / switching_periods = 147456 / 266.67 = 552)
+  Batch Size (memory): 9021 cases
+    (sum of per-GPU batch sizes: GPU0:4512 + GPU1:4509 = 9021 cases)
+  Final Batch Size: 552 cases per batch
+
+Simulation Configuration:
+  Topology: 3-level 2-stage
+  Modulation: svm
+  Total Cases: 47680
+  Rounds: 6
+
+
+========================================
+Starting Degradation Tracking Simulation
+Will run mission profile repeatedly until one component reaches degradation = 1.0
+========================================
+
+
+============================================================
+Mission Profile Iteration #1
+============================================================
+  Stressor data saved to: results/stressor_round_1_iteration_1.csv (7946 records)
+Round 1/6 finished: 7946 cases in 47.46 s
+
+Accumulated Degradation Progress (Round 1):
+  Cooling Fan:
+    Electrical (External): 2.387423e-04
+    Electrical (Internal): 2.748878e-04
+    Mechanical (External): 1.747981e-03
+    Mechanical (Internal): 3.984583e-03
+  Capacitor: 2.771390e-02
+  IGBT (DeltaT model): 5.729014e-04
+  IGBT (Arrhenius model): 1.649961e-02
+  PCB: 3.976067e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 2.387423e-04
+    Electrical (Internal): 2.748878e-04
+    Mechanical (External): 1.747981e-03
+    Mechanical (Internal): 3.984583e-03
+  Capacitor: 2.771390e-02
+  IGBT (DeltaT model): 5.729014e-04
+  IGBT (Arrhenius model): 1.649961e-02
+  PCB: 3.976067e-06
+
+  Stressor data saved to: results/stressor_round_2_iteration_1.csv (7946 records)
+Round 2/6 finished: 7946 cases in 47.39 s
+
+Accumulated Degradation Progress (Round 2):
+  Cooling Fan:
+    Electrical (External): 4.442644e-04
+    Electrical (Internal): 3.570727e-04
+    Mechanical (External): 2.470529e-03
+    Mechanical (Internal): 5.966232e-03
+  Capacitor: 4.883107e-02
+  IGBT (DeltaT model): 7.160670e-04
+  IGBT (Arrhenius model): 5.346401e-03
+  PCB: 7.238641e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 6.830067e-04
+    Electrical (Internal): 6.319605e-04
+    Mechanical (External): 4.218510e-03
+    Mechanical (Internal): 9.950814e-03
+  Capacitor: 7.654497e-02
+  IGBT (DeltaT model): 1.288968e-03
+  IGBT (Arrhenius model): 2.184601e-02
+  PCB: 1.121471e-05
+
+  Stressor data saved to: results/stressor_round_3_iteration_1.csv (7946 records)
+Round 3/6 finished: 7946 cases in 48.18 s
+
+Accumulated Degradation Progress (Round 3):
+  Cooling Fan:
+    Electrical (External): 9.111858e-04
+    Electrical (Internal): 5.354543e-04
+    Mechanical (External): 3.316628e-03
+    Mechanical (Internal): 7.945792e-03
+  Capacitor: 8.182022e-02
+  IGBT (DeltaT model): 7.154566e-04
+  IGBT (Arrhenius model): 1.169343e-02
+  PCB: 3.565083e-06
+
+Cumulative Degradation Progress (This Iteration):
+  Cooling Fan:
+    Electrical (External): 1.594192e-03
+    Electrical (Internal): 1.167415e-03
+    Mechanical (External): 7.535138e-03
+    Mechanical (Internal): 1.789661e-02
+  Capacitor: 1.583652e-01
+  IGBT (DeltaT model): 2.004425e-03
+  IGBT (Arrhenius model): 3.353945e-02
+  PCB: 1.477979e-05
+

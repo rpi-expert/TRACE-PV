@@ -193,7 +193,7 @@ double calculate_igbt_lifetime_arrhenius(
     
     // Calculate acceleration factor using corrosion/dendrites model
     // AF = (rh/RH_ref)^n1 * exp(Ea / kB * (1/T_ref - 1/Tj)) * (V_ref/voltage)^n2
-    double rh_ratio = rh / rh_ref;
+    double rh_ratio = rh / rh_ref ;
     double rh_factor = std::pow(rh_ratio, coeffs.arrhenius_model.n1);
     
     double temp_factor = std::exp(coeffs.arrhenius_model.Ea / BOLTZMANN_CONSTANT * 

@@ -49,6 +49,9 @@ __device__ double calculate_capacitor_lifetime_device(
         double beta_1 = aluminum.beta_min;
         
         // Calculate voltage factor: (V / V_0)^-β_1
+        // Note: dc_voltage should already account for topology (divided by 2 for 3-level topology)
+        // For 3-level: voltage_ratio = (vdc_target / 2) / V0
+        // For 2-level: voltage_ratio = vdc_target / V0
         if (dc_voltage <= 0.0) {
             return 0.0;
         }

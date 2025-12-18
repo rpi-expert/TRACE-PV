@@ -344,6 +344,7 @@ int main(int argc, char** argv) {
         // ====================================================================
         
         // Create base simulation parameters from database
+        // Database is required for all inverter and grid parameters
         SimulationParameters base_params;
         if (!sim_model.pv_inverter_part_number.empty() && !sim_model.grid_part_number.empty()) {
             // Load parameters from database
@@ -354,9 +355,14 @@ int main(int argc, char** argv) {
                 options.modulation
             );
         } else {
-            // Fallback to default parameters if database profiles not available
-            // Use default topology (3-level, 2-stage) if not in database
-            base_params = create_default_parameters(3, 2, options.modulation);
+            // Database profiles are required - cannot use fallback defaults
+            std::string error_msg = "PV inverter and grid part numbers are required in simulation model.\n";
+            error_msg += "  PV Inverter Part Number: " + 
+                        (sim_model.pv_inverter_part_number.empty() ? "MISSING" : sim_model.pv_inverter_part_number) + "\n";
+            error_msg += "  Grid Part Number: " + 
+                        (sim_model.grid_part_number.empty() ? "MISSING" : sim_model.grid_part_number) + "\n";
+            error_msg += "  Please ensure simulation_model.json contains valid part numbers.";
+            throw std::runtime_error(error_msg);
         }
         
         // Extract topology_level and model_stage from loaded parameters (for compatibility)
@@ -582,6 +588,9 @@ int main(int argc, char** argv) {
         std::cout << "Will run mission profile repeatedly until one component reaches degradation = 1.0" << std::endl;
         std::cout << "========================================\n" << std::endl;
         
+
+        int threshold = 10;
+
         while (!degradation_reached) {
             mission_profile_iteration++;
             std::cout << "\n" << std::string(60, '=') << std::endl;
@@ -591,15 +600,15 @@ int main(int argc, char** argv) {
             // Check if electrical simulation can be skipped
             // Skip if iteration > 1 (we have stored results from first iteration) AND iteration <= 10
             bool skip_electrical_simulation = false;
-            if (mission_profile_iteration > 1 && mission_profile_iteration <= 10 && electrical_results_stored) {
+            if (mission_profile_iteration > 1 && mission_profile_iteration <= threshold && electrical_results_stored) {
                 skip_electrical_simulation = true;
                 std::cout << "Skipping electrical simulation (iteration " << mission_profile_iteration 
                           << " <= 10, using stored results from first iteration)" << std::endl;
-            } else if (mission_profile_iteration > 1 && mission_profile_iteration <= 10 && !electrical_results_stored) {
+            } else if (mission_profile_iteration > 1 && mission_profile_iteration <= threshold && !electrical_results_stored) {
                 std::cout << "Warning: Cannot skip electrical simulation - results not stored yet. Running simulation." << std::endl;
-            } else if (mission_profile_iteration > 10) {
+            } else if (mission_profile_iteration > threshold) {
                 std::cout << "Running electrical simulation (iteration " << mission_profile_iteration 
-                          << " > 10, skipping not allowed)" << std::endl;
+                          << " > " << threshold << ", skipping not allowed)" << std::endl;
             }
             
             // Reset case index for this mission profile iteration
@@ -854,7 +863,11 @@ int main(int argc, char** argv) {
                                 
                                 // Calculate losses from stress waveforms
                                 // 2.1 Capacitor loss model: input I_cap_rms and ESR, output capacitor loss
+                                // For 3-level topology: two capacitors in series, so effective ESR is doubled
                                 double esr_value = cap_coeffs_loaded ? cap_coeffs.esr : 0.01; // Use default if not loaded
+                                if (params.topology_level == 3) {
+                                    esr_value = esr_value * 2.0;  // Two capacitors in series: ESR_total = ESR1 + ESR2
+                                }
                                 CapacitorLossResult capacitor_loss = calculate_capacitor_loss(stress.I_cap_rms, esr_value);
                                 
                                 // Debug: Print capacitor loss calculation details
@@ -928,7 +941,12 @@ int main(int argc, char** argv) {
                                     if (cap_voltage_type == "AC") {
                                         batch_capacitor_voltages.push_back(sc.ac_voltage);
                                     } else {
-                                        batch_capacitor_voltages.push_back(params.vdc_target);
+                                        // For DC capacitors: in 3-level topology, each capacitor sees half the total DC-link voltage
+                                        double dc_voltage = params.vdc_target;
+                                        if (params.topology_level == 3) {
+                                            dc_voltage = params.vdc_target / 2.0;
+                                        }
+                                        batch_capacitor_voltages.push_back(dc_voltage);
                                     }
                                 } else {
                                     batch_capacitor_voltages.push_back(0.0);
@@ -1375,6 +1393,41 @@ int main(int argc, char** argv) {
                         if (!accumulated_internal_temps.empty() && !sim_model.pcb_part_number.empty()) {
                             PCBParameters pcb_params;
                             if (component_db.load_pcb(sim_model.pcb_part_number, pcb_params)) {
+                                // Debug: Print PCB parameters
+                                static bool pcb_params_debug_printed = false;
+                                if (!pcb_params_debug_printed) {
+                                    std::cerr << "DEBUG: PCB Reliability Analysis:" << std::endl;
+                                    std::cerr << "  Part number: " << sim_model.pcb_part_number << std::endl;
+                                    std::cerr << "  Component type: " << pcb_params.component_type << std::endl;
+                                    std::cerr << "  Material: " << pcb_params.material << std::endl;
+                                    std::cerr << "  Component dimensions (l x w x h): " << pcb_params.component_dims.length 
+                                              << " x " << pcb_params.component_dims.width 
+                                              << " x " << pcb_params.component_dims.thickness << " mm" << std::endl;
+                                    std::cerr << "  Copper dimensions (l x w x h): " << pcb_params.copper_dims.length 
+                                              << " x " << pcb_params.copper_dims.width 
+                                              << " x " << pcb_params.copper_dims.thickness << " mm" << std::endl;
+                                    std::cerr << "  Solder dimensions (l x w x h): " << pcb_params.solder_dims.length 
+                                              << " x " << pcb_params.solder_dims.width 
+                                              << " x " << pcb_params.solder_dims.thickness << " mm" << std::endl;
+                                    std::cerr << "  CTE_component: " << std::scientific << pcb_params.CTE_component << " 1/K" << std::endl;
+                                    std::cerr << "  CTE_FR4: " << std::scientific << pcb_params.CTE_FR4 << " 1/K" << std::endl;
+                                    std::cerr << "  d_CTE: " << std::scientific << (pcb_params.CTE_component - pcb_params.CTE_FR4) << " 1/K" << std::endl;
+                                    std::cerr << "  PCB thickness: " << std::fixed << pcb_params.pcb_thickness << " mm" << std::endl;
+                                    std::cerr << "  E_comp: " << std::fixed << 310000.0 << " Pa" << std::endl;
+                                    std::cerr << "  E_FR4: " << std::fixed << pcb_params.E_FR4 << " Pa" << std::endl;
+                                    std::cerr << "  G_solder: " << std::fixed << pcb_params.shear_modulus << " Pa" << std::endl;
+                                    std::cerr << "  G_copper: " << std::fixed << pcb_params.G_copper << " Pa" << std::endl;
+                                    std::cerr << "  G_FR4: " << std::fixed << pcb_params.G_FR4 << " Pa" << std::endl;
+                                    std::cerr << "  Poisson_FR4: " << std::fixed << pcb_params.Poisson_FR4 << std::endl;
+                                    std::cerr << "  Adjust param: " << std::fixed << pcb_params.adjust_param << std::endl;
+                                    std::cerr << "  Accumulated internal temps: " << accumulated_internal_temps.size() << " points" << std::endl;
+                                    if (!accumulated_internal_temps.empty()) {
+                                        auto minmax = std::minmax_element(accumulated_internal_temps.begin(), accumulated_internal_temps.end());
+                                        std::cerr << "  Internal temp range: [" << std::fixed << *minmax.first << ", " << *minmax.second << "] C" << std::endl;
+                                    }
+                                    pcb_params_debug_printed = true;
+                                }
+                                
                                 // Perform rainflow counting with threshold (e.g., 1°C)
                                 const double rainflow_threshold = 1.0;  // Minimum temperature difference to consider
                                 RainflowResult rainflow_result = rainflow_counting(
@@ -1382,12 +1435,111 @@ int main(int argc, char** argv) {
                                     rainflow_threshold
                                 );
                                 
-                                // Calculate stressor using new model: sum of 1/Nf for each deltaT
-                                pcb_degradation = calculate_pcb_stressor(
-                                    rainflow_result.delta_range,
-                                    rainflow_result.delta_cycle,
-                                    pcb_params
-                                );
+                                // Debug: Print rainflow counting results
+                                static bool pcb_rainflow_result_debug_printed = false;
+                                if (!pcb_rainflow_result_debug_printed) {
+                                    std::cerr << "DEBUG: PCB Rainflow Counting Results:" << std::endl;
+                                    std::cerr << "  Number of cycles: " << rainflow_result.delta_range.size() << std::endl;
+                                    if (!rainflow_result.delta_range.empty()) {
+                                        auto minmax_delta = std::minmax_element(rainflow_result.delta_range.begin(), rainflow_result.delta_range.end());
+                                        std::cerr << "  Delta T range: [" << *minmax_delta.first << ", " << *minmax_delta.second << "] C" << std::endl;
+                                        std::cerr << "  First few cycles:" << std::endl;
+                                        size_t num_to_print = std::min(size_t(5), rainflow_result.delta_range.size());
+                                        for (size_t i = 0; i < num_to_print; ++i) {
+                                            std::cerr << "    Cycle " << i << ": deltaT=" << rainflow_result.delta_range[i] 
+                                                      << " C, cycles=" << rainflow_result.delta_cycle[i] << std::endl;
+                                        }
+                                    }
+                                    pcb_rainflow_result_debug_printed = true;
+                                }
+                                
+                                // Calculate stressor using new model: sum of cycles/Nf for each deltaT
+                                // Also calculate detailed debug info for first few cycles
+                                static bool pcb_stressor_debug_printed = false;
+                                double total_pcb_stressor = 0.0;
+                                
+                                // Calculate Nf and stressor for each cycle with debug output
+                                for (size_t i = 0; i < rainflow_result.delta_range.size(); ++i) {
+                                    double delta_T = rainflow_result.delta_range[i];
+                                    double cycles = rainflow_result.delta_cycle[i];
+                                    
+                                    // Calculate Nf for this delta_T using PCB reliability model
+                                    double Nf = calculate_pcb_nf(delta_T, pcb_params);
+                                    
+                                    // Accumulate stressor: cycles/Nf for each cycle
+                                    if (Nf > 0.0) {
+                                        double cycle_stressor = cycles / Nf;
+                                        total_pcb_stressor += cycle_stressor;
+                                        
+                                        // Debug: Print first few PCB calculations with detailed intermediate values
+                                        if (!pcb_stressor_debug_printed && i < 5) {
+                                            std::cerr << "DEBUG: PCB Stressor Calculation (Cycle " << i << "):" << std::endl;
+                                            std::cerr << "  deltaT: " << std::fixed << std::setprecision(3) << delta_T << " C" << std::endl;
+                                            std::cerr << "  cycles: " << std::fixed << cycles << std::endl;
+                                            
+                                            // Calculate intermediate values for debug output (duplicate calculation for debugging)
+                                            double delta_T_abs = std::abs(delta_T);
+                                            double component_l = pcb_params.component_dims.length;
+                                            double component_w = pcb_params.component_dims.width;
+                                            double component_h = pcb_params.component_dims.thickness;
+                                            double copper_l = pcb_params.copper_dims.length;
+                                            double copper_w = pcb_params.copper_dims.width;
+                                            double copper_h = pcb_params.copper_dims.thickness;
+                                            double solder_l = pcb_params.solder_dims.length;
+                                            double solder_w = pcb_params.solder_dims.width;
+                                            double solder_h = pcb_params.solder_dims.thickness;
+                                            double CTE_comp = pcb_params.CTE_component;
+                                            double CTE_FR4 = pcb_params.CTE_FR4;
+                                            double E_comp = 310000.0;
+                                            double E_FR4 = pcb_params.E_FR4;
+                                            double G_solder = pcb_params.shear_modulus;
+                                            double G_copper = pcb_params.G_copper;
+                                            double G_FR4 = pcb_params.G_FR4;
+                                            double Poisson_FR4 = pcb_params.Poisson_FR4;
+                                            double pcb_thickness = pcb_params.pcb_thickness;
+                                            double d_CTE = CTE_comp - CTE_FR4;
+                                            double Ld_SE = 0.5 * component_l;
+                                            double A_SE = solder_l * solder_w;
+                                            double A1_SE = component_h * component_w;
+                                            double A2_SE = 2.0 * copper_w * pcb_thickness;
+                                            double Ab_SE = copper_l * copper_w;
+                                            double hb_SE = copper_h;
+                                            double As_SE = 0.75 * Ab_SE;
+                                            double a_SE = 0.5 * copper_l;
+                                            double hs_SE = solder_h;
+                                            double d_strain_SE = 1.38271485223961 * std::sqrt(Ld_SE * Ld_SE * Ld_SE / (A_SE * hs_SE)) * std::abs(d_CTE * delta_T_abs);
+                                            double Fnum_SE = (CTE_FR4 - CTE_comp) * delta_T_abs * Ld_SE;
+                                            double Fden_SE = Ld_SE / (E_comp * A1_SE) + Ld_SE / (E_FR4 * A2_SE) + hs_SE / (As_SE * G_solder) + hb_SE / (Ab_SE * G_copper) + (2.0 - Poisson_FR4) / (9.0 * G_FR4 * a_SE);
+                                            double F = Fnum_SE / Fden_SE;
+                                            double Tau_SE = F / As_SE;
+                                            double dW_SE = Tau_SE * d_strain_SE;
+                                            double adjust_param = pcb_params.adjust_param;
+                                            
+                                            std::cerr << "  Ld_SE: " << std::scientific << std::setprecision(6) << Ld_SE << " mm" << std::endl;
+                                            std::cerr << "  A_SE: " << std::scientific << A_SE << " mm^2" << std::endl;
+                                            std::cerr << "  A1_SE: " << std::scientific << A1_SE << " mm^2" << std::endl;
+                                            std::cerr << "  A2_SE: " << std::scientific << A2_SE << " mm^2" << std::endl;
+                                            std::cerr << "  As_SE: " << std::scientific << As_SE << " mm^2" << std::endl;
+                                            std::cerr << "  d_strain_SE: " << std::scientific << d_strain_SE << std::endl;
+                                            std::cerr << "  Fnum_SE: " << std::scientific << Fnum_SE << " N" << std::endl;
+                                            std::cerr << "  Fden_SE: " << std::scientific << Fden_SE << " m/N" << std::endl;
+                                            std::cerr << "  F: " << std::scientific << F << " N" << std::endl;
+                                            std::cerr << "  Tau_SE: " << std::scientific << Tau_SE << " Pa" << std::endl;
+                                            std::cerr << "  dW_SE: " << std::scientific << dW_SE << " J/m^3" << std::endl;
+                                            std::cerr << "  adjust_param * dW_SE / 5920: " << std::scientific << (adjust_param * dW_SE / 5920.0) << std::endl;
+                                            std::cerr << "  Nf: " << std::scientific << Nf << " cycles to failure" << std::endl;
+                                            std::cerr << "  stressor (cycles/Nf): " << std::scientific << cycle_stressor << std::endl;
+                                            if (i == 4) pcb_stressor_debug_printed = true;
+                                        }
+                                    }
+                                }
+                                
+                                if (!pcb_stressor_debug_printed) {
+                                    std::cerr << "DEBUG: PCB Total Stressor: " << total_pcb_stressor << std::endl;
+                                    pcb_stressor_debug_printed = true;
+                                }
+                                
+                                pcb_degradation = total_pcb_stressor;
                                 
                                 // Distribute PCB stressor to cases (simplified: distribute equally)
                                 double per_case_pcb_stressor = pcb_degradation / accumulated_internal_temps.size();
@@ -1414,6 +1566,22 @@ int main(int argc, char** argv) {
                                             round_stressor_records.push_back(record);
                                         }
                                     }
+                                }
+                            } else {
+                                // Debug: Why PCB calculation is skipped
+                                static bool pcb_skip_debug_printed = false;
+                                if (!pcb_skip_debug_printed) {
+                                    if (sim_model.pcb_part_number.empty()) {
+                                        std::cerr << "DEBUG: PCB calculation skipped - part number is empty" << std::endl;
+                                    } else if (accumulated_internal_temps.empty()) {
+                                        std::cerr << "DEBUG: PCB calculation skipped - accumulated_internal_temps is empty" << std::endl;
+                                    } else {
+                                        PCBParameters pcb_params_check;
+                                        if (!component_db.load_pcb(sim_model.pcb_part_number, pcb_params_check)) {
+                                            std::cerr << "DEBUG: PCB calculation skipped - failed to load PCB: " << sim_model.pcb_part_number << std::endl;
+                                        }
+                                    }
+                                    pcb_skip_debug_printed = true;
                                 }
                             }
                         }

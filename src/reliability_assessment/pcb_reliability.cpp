@@ -94,7 +94,8 @@ double calculate_pcb_stressor(
         // Calculate Nf for this delta_T
         double Nf = calculate_pcb_nf(delta_T, pcb_params);
         
-        // Accumulate stressor: 1/Nf for each cycle
+        // Accumulate stressor: cycles/Nf for each cycle type
+        // This represents the fraction of lifetime consumed by these cycles
         if (Nf > 0.0) {
             total_stressor += cycles / Nf;
         }
