@@ -1,18 +1,17 @@
 Topology: 3l2s
-Number of GPUs: 2
+Number of GPUs: 1
 Total Cases per Iteration: 47680
-Batch Size: 552
-Number of Rounds per Iteration: 6
+Batch Size: 1013
+Number of Rounds per Iteration: 1
 Total Mission Profile Iterations: 6
-Total Rounds: 36
+Total Rounds: 6
 Failed Component: IGBT (Arrhenius model)
-Total Wall Clock Time: 380.397928 s
+Total Wall Clock Time: 559.511435 s
 Simulation Time per GPU:
-  GPU 0: 214.327649 s
-  GPU 1: 237.114998 s
-Total Compute Time (all GPUs): 451.442647 s
-Average Time per Case: 0.001330 s
-Speedup: 1.186764x
+  GPU 0: 121.230733 s
+Total Compute Time (all GPUs): 121.230733 s
+Average Time per Case: 0.001956 s
+Speedup: 0.216672x
 
 Final Degradation Progress:
   Fan Electrical External: 0.024864
@@ -20,6 +19,6 @@ Final Degradation Progress:
   Fan Mechanical External: 0.095397
   Fan Mechanical Internal: 0.227835
   Capacitor: 0.075738
-  IGBT (DeltaT model): 0.015786
+  IGBT (DeltaT model): 0.015050
   IGBT (Arrhenius model): 1.012572
-  PCB: 0.000130
+  PCB: 0.000094
