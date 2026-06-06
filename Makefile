@@ -1,5 +1,7 @@
 CUDA_PATH ?= /usr/local/cuda
 NVCC      := $(CUDA_PATH)/bin/nvcc
+GPU_SM    ?= $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
+NVCC_ARCH := $(if $(GPU_SM),-arch=sm_$(GPU_SM),)
 
 TARGET    := trace_pv
 BIN_DIR   := bin
@@ -56,10 +58,10 @@ TARGET_PATH := $(BIN_DIR)/$(TARGET)
 # SQLite3 configuration
 SQLITE3_PREFIX := $(shell pwd)/sqlite3
 SQLITE3_CFLAGS := $(shell if [ -f $(SQLITE3_PREFIX)/include/sqlite3.h ]; then echo "-I$(SQLITE3_PREFIX)/include"; elif pkg-config --exists sqlite3 2>/dev/null; then pkg-config --cflags sqlite3; else echo ""; fi)
-SQLITE3_LIBS := $(shell if [ -f $(SQLITE3_PREFIX)/lib/libsqlite3.so ]; then echo "-L$(SQLITE3_PREFIX)/lib -lsqlite3"; elif pkg-config --exists sqlite3 2>/dev/null; then pkg-config --libs sqlite3; else echo "-lsqlite3"; fi)
+SQLITE3_LIBS := $(shell if [ -f $(SQLITE3_PREFIX)/lib/libsqlite3.so ]; then echo "-L$(SQLITE3_PREFIX)/lib -Xlinker -rpath -Xlinker $(SQLITE3_PREFIX)/lib -lsqlite3"; elif pkg-config --exists sqlite3 2>/dev/null; then pkg-config --libs sqlite3; else echo "-lsqlite3"; fi)
 
 CXX_FLAGS    := -std=c++17 -O2 -I. -I$(SRC_DIR) -I$(SRC_DIR)/multi_physics_simulator/electrical_simulation -I$(SRC_DIR)/multi_physics_simulator/environmental_simulation -I$(SRC_DIR)/simulation_preparation -I$(SRC_DIR)/reliability_assessment -Icomponent_database -Icomponent_database/offline_trainning $(SQLITE3_CFLAGS)
-NVCC_FLAGS   := -std=c++17 -O2 -I. -I$(SRC_DIR) -I$(SRC_DIR)/multi_physics_simulator/electrical_simulation -I$(SRC_DIR)/multi_physics_simulator/environmental_simulation -I$(SRC_DIR)/simulation_preparation -I$(SRC_DIR)/reliability_assessment -Icomponent_database -Icomponent_database/offline_trainning $(SQLITE3_CFLAGS) -Xcompiler -fopenmp -allow-unsupported-compiler -Xcompiler -Wno-error -lcudart -lgomp
+NVCC_FLAGS   := -std=c++17 -O2 -I. -I$(SRC_DIR) -I$(SRC_DIR)/multi_physics_simulator/electrical_simulation -I$(SRC_DIR)/multi_physics_simulator/environmental_simulation -I$(SRC_DIR)/simulation_preparation -I$(SRC_DIR)/reliability_assessment -Icomponent_database -Icomponent_database/offline_trainning $(SQLITE3_CFLAGS) $(NVCC_ARCH) -Xcompiler -fopenmp -allow-unsupported-compiler -Xcompiler -Wno-error -lcudart -lgomp
 NVCC_DC_FLAGS := $(NVCC_FLAGS) -dc  # Device code compilation flag for separate compilation
 
 all: $(TARGET_PATH)

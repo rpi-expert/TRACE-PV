@@ -2,11 +2,12 @@
 # Wrapper script to run nrsdb.py with the virtual environment
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_PYTHON="${SCRIPT_DIR}/venv/bin/python3"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+VENV_PYTHON="${PROJECT_ROOT}/venv/bin/python3"
 
-if [ ! -f "$VENV_PYTHON" ]; then
-    echo "Error: Virtual environment not found at ${SCRIPT_DIR}/venv"
-    echo "Please run: python3 -m venv venv && ./venv/bin/pip install pandas requests"
+if [ ! -x "$VENV_PYTHON" ]; then
+    echo "Error: Project virtual environment not found at ${PROJECT_ROOT}/venv"
+    echo "Please run: python3 -m venv ${PROJECT_ROOT}/venv && ${PROJECT_ROOT}/venv/bin/python3 -m pip install pandas requests"
     exit 1
 fi
 
