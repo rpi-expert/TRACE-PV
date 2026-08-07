@@ -182,8 +182,8 @@ $(BIN_DIR)/reliability_models.o: $(SRC_DIR)/reliability_assessment/reliability_m
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 run: $(TARGET_PATH)
-	@if [ -z "$(TOPOLOGY)" ] || [ -z "$(CSV)" ]; then \
-		echo "Usage: make run TOPOLOGY=<2l2s|2l1s|3l2s|3l1s> CSV=<file.csv> [ROUNDS=<N>] [MOD=<svm|spwm>] [NGPUS=<N>]"; \
+	@if [ -z "$(TOPOLOGY)" ]; then \
+		echo "Usage: make run TOPOLOGY=<2l2s|2l1s|3l2s|3l1s> [MODE=mission|static] [CSV=<file.csv>] [ROUNDS=<N>] [MOD=<svm|spwm>] [NGPUS=<N>]"; \
 		exit 1; \
 	fi
 	@if [ -z "$(ROUNDS)" ]; then \
@@ -192,10 +192,25 @@ run: $(TARGET_PATH)
 	@if [ -z "$(MOD)" ]; then \
 		MOD=svm; \
 	fi
+	@if [ -z "$(MODE)" ]; then \
+		MODE=mission; \
+	fi
 	@if [ -z "$(NGPUS)" ]; then \
-		$(TARGET_PATH) --topology $(TOPOLOGY) --csv $(CSV) --rounds $(ROUNDS) --modulation $(MOD); \
+		if [ "$(MODE)" = "static" ]; then \
+			$(TARGET_PATH) --topology $(TOPOLOGY) --input-mode static --rounds $(ROUNDS) --modulation $(MOD); \
+		elif [ -n "$(CSV)" ]; then \
+			$(TARGET_PATH) --topology $(TOPOLOGY) --mission-csv $(CSV) --rounds $(ROUNDS) --modulation $(MOD); \
+		else \
+			$(TARGET_PATH) --topology $(TOPOLOGY) --input-mode mission --rounds $(ROUNDS) --modulation $(MOD); \
+		fi; \
 	else \
-		$(TARGET_PATH) --topology $(TOPOLOGY) --csv $(CSV) --rounds $(ROUNDS) --modulation $(MOD) --ngpus $(NGPUS); \
+		if [ "$(MODE)" = "static" ]; then \
+			$(TARGET_PATH) --topology $(TOPOLOGY) --input-mode static --rounds $(ROUNDS) --modulation $(MOD) --ngpus $(NGPUS); \
+		elif [ -n "$(CSV)" ]; then \
+			$(TARGET_PATH) --topology $(TOPOLOGY) --mission-csv $(CSV) --rounds $(ROUNDS) --modulation $(MOD) --ngpus $(NGPUS); \
+		else \
+			$(TARGET_PATH) --topology $(TOPOLOGY) --input-mode mission --rounds $(ROUNDS) --modulation $(MOD) --ngpus $(NGPUS); \
+		fi; \
 	fi
 
 clean:

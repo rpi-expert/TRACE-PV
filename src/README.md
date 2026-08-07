@@ -18,6 +18,13 @@ This project extends the A2S standalone simulation to support batch processing o
 - `3l2s`: Three-level two-stage
 - `3l1s`: Three-level single-stage
 
+## Input Modes
+
+The current `trace_pv` binary supports two input modes:
+
+- Mission profile mode, using either the split mission files or one combined CSV.
+- Static mode, using one fixed temperature/RH/voltage/power set for repeated simulation cases.
+
 ## CSV Input Format
 
 The CSV file should have the following format:
@@ -26,6 +33,13 @@ ambient_temperature,solar_irradiance,ac_voltage
 25.0,1000.0,480.0
 30.0,800.0,475.0
 ...
+```
+
+Combined mission profiles may also use:
+
+```
+time,ambient_temperature,rh,GHI,ac_voltage,ac_power
+2024-01-01 07:25:00,2.09,96.38,5.11,259.62,300
 ```
 
 - `ambient_temperature`: Temperature in Celsius (typically 15-45°C)
@@ -43,13 +57,15 @@ make
 ## Usage
 
 ```bash
-./a2s_v2 --topology <2l2s|2l1s|3l2s|3l1s> --csv <file.csv> [--rounds <N>] [--modulation <svm|spwm>]
+./trace_pv --topology <2l2s|2l1s|3l2s|3l1s> [--input-mode mission|static] [--mission-csv <file.csv>] [--rounds <N>] [--modulation <svm|spwm>]
 ```
 
 ### Arguments
 
 - `--topology` or `-t`: Topology type (required)
-- `--csv` or `-c`: Path to CSV file with simulation cases (required)
+- `--mission-csv`, `--csv`, or `-c`: Path to combined mission profile CSV (optional)
+- `--input-mode`: `mission` or `static` (default: `mission`)
+- `--static-temp`, `--static-rh`, `--static-voltage`, `--static-power`: Static mode values (defaults: 95, 95, 500, 300)
 - `--rounds` or `-r`: Number of rounds to process (default: 1)
 - `--modulation` or `-m`: Modulation type svm or spwm (default: svm)
 
@@ -57,13 +73,13 @@ make
 
 ```bash
 # Process all cases in one round
-./a2s_v2 --topology 2l2s --csv simulation_cases_100k.csv
+./trace_pv --topology 2l2s --mission-csv simulator_inputs/mission_profile/year_long_mission_profile_2024.csv
 
-# Process in 10 rounds
-./a2s_v2 --topology 2l1s --csv simulation_cases_100k.csv --rounds 10
+# Run static mode
+./trace_pv --topology 3l2s --input-mode static --static-temp 95 --static-rh 95 --static-voltage 500 --static-power 300
 
 # Use SPWM modulation
-./a2s_v2 --topology 3l2s --csv simulation_cases_100k.csv --modulation spwm
+./trace_pv --topology 3l2s --modulation spwm
 ```
 
 ### Using Make
@@ -100,4 +116,3 @@ Formula: `V_pv = V_base * (1 + temp_coeff * (T - T_ref)) * (G / G_ref)`
 ## Performance
 
 The system processes cases in batches to maximize GPU utilization while respecting memory constraints. Progress is reported after each round completes.
-

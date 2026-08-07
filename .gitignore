@@ -1,0 +1,56 @@
+# macOS and external-drive metadata
+.DS_Store
+._*
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Native build products
+bin/
+*.o
+*.a
+*.so
+*.so.*
+component_database/offline_trainning/offline_data_generator
+component_database/offline_trainning/case_study_example
+component_database/offline_trainning/usage_example
+
+# Generated databases
+component_database/component_parameters.db
+component_database/*.db-shm
+component_database/*.db-wal
+
+# Simulator and plotting output
+results/
+logs/
+outputs/
+plots/*.png
+simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv
+
+# Case-study inputs kept locally and reproducible outputs
+internal_source_data/*.csv
+case_studies/**/__pycache__/
+case_studies/**/outputs*/
+case_studies/**/full_year_rounds*/
+case_studies/**/mission_profiles/
+case_studies/**/capacitor_thermal_*.csv
+case_studies/**/first_round_*.csv
+
+# LaTeX and visual-QA build products
+report/workflow/*.aux
+report/workflow/*.fdb_latexmk
+report/workflow/*.fls
+report/workflow/*.log
+report/workflow/*.out
+report/workflow/*.pdf
+report/workflow/qa_pages/

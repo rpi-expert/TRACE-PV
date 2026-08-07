@@ -41,23 +41,43 @@ namespace {
 struct CliOptions {
     std::string topology;  // "2l2s", "2l1s", "3l2s", "3l1s"
     std::string simulation_model_file = "simulator_inputs/simulation_model/example_simulation_model.json";
+    std::string input_mode = "mission";  // "mission" or "static"
+    std::string mission_csv_file;
+    std::string environmental_csv_file = "simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv";
+    std::string operating_csv_file = "simulator_inputs/mission_profile/operating_condition/operating_mission_profile.csv";
+    double static_temperature = 95.0;
+    double static_rh = 95.0;
+    double static_voltage = 500.0;
+    double static_power = 300.0;
+    double static_irradiance = 1000.0;
+    int static_cases = 1;
     int num_rounds = 1;
     ModulationType modulation = ModulationType::SVM;
     int num_gpus = -1;  // -1 means use all available GPUs
 };
 
 void print_usage(const char* program) {
-    std::cout << "Usage: " << program << " --topology <2l2s|2l1s|3l2s|3l1s> [--rounds <N>] [--modulation <svm|spwm>] [--ngpus <N|all>] [--model <model.json>]" << std::endl;
+    std::cout << "Usage: " << program << " --topology <2l2s|2l1s|3l2s|3l1s> [OPTIONS]" << std::endl;
     std::cout << "  --topology: Topology type:" << std::endl;
     std::cout << "     2l2s = two-level two-stage" << std::endl;
     std::cout << "     2l1s = two-level single-stage" << std::endl;
     std::cout << "     3l2s = three-level two-stage" << std::endl;
     std::cout << "     3l1s = three-level single-stage" << std::endl;
+    std::cout << "  --input-mode: Input mode, mission or static (default: mission)" << std::endl;
+    std::cout << "  --mission-csv / --csv: Combined mission profile CSV" << std::endl;
+    std::cout << "  --environmental-csv: Environmental mission profile CSV for split-file mode" << std::endl;
+    std::cout << "  --operating-csv: Operating mission profile CSV for split-file mode" << std::endl;
+    std::cout << "  --static-temp: Static ambient temperature in Celsius (default: 95)" << std::endl;
+    std::cout << "  --static-rh: Static relative humidity in percent (default: 95)" << std::endl;
+    std::cout << "  --static-voltage: Static AC voltage RMS line-to-line in volts (default: 500)" << std::endl;
+    std::cout << "  --static-power: Static AC power in watts for thermal model (default: 300)" << std::endl;
+    std::cout << "  --static-irradiance: Static solar irradiance in W/m^2 (default: 1000)" << std::endl;
+    std::cout << "  --static-cases: Number of repeated static cases (default: 1)" << std::endl;
     std::cout << "  --rounds: Number of rounds to process (default: 1)" << std::endl;
     std::cout << "  --modulation: Modulation type svm or spwm (default: svm)" << std::endl;
     std::cout << "  --ngpus: Number of GPUs to use, or 'all' to use all available (default: use all available)" << std::endl;
     std::cout << "  --model: Simulation model JSON file with component part numbers (default: simulator_inputs/simulation_model/example_simulation_model.json)" << std::endl;
-    std::cout << "\nNote: Mission profile is automatically loaded from:" << std::endl;
+    std::cout << "\nMission mode loads --mission-csv when supplied, otherwise split files:" << std::endl;
     std::cout << "  - simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv" << std::endl;
     std::cout << "  - simulator_inputs/mission_profile/operating_condition/operating_mission_profile.csv" << std::endl;
 }
@@ -91,6 +111,41 @@ CliOptions parse_arguments(int argc, char** argv) {
             }
         } else if ((arg == "--model" || arg == "-M") && (i + 1) < argc) {
             opts.simulation_model_file = argv[++i];
+        } else if (arg == "--input-mode" && (i + 1) < argc) {
+            opts.input_mode = argv[++i];
+            if (opts.input_mode != "mission" && opts.input_mode != "static") {
+                throw std::invalid_argument("--input-mode must be 'mission' or 'static'");
+            }
+        } else if ((arg == "--mission-csv" || arg == "--csv" || arg == "-c") && (i + 1) < argc) {
+            opts.mission_csv_file = argv[++i];
+            opts.input_mode = "mission";
+        } else if (arg == "--environmental-csv" && (i + 1) < argc) {
+            opts.environmental_csv_file = argv[++i];
+            opts.input_mode = "mission";
+        } else if (arg == "--operating-csv" && (i + 1) < argc) {
+            opts.operating_csv_file = argv[++i];
+            opts.input_mode = "mission";
+        } else if (arg == "--static-temp" && (i + 1) < argc) {
+            opts.static_temperature = std::stod(argv[++i]);
+            opts.input_mode = "static";
+        } else if (arg == "--static-rh" && (i + 1) < argc) {
+            opts.static_rh = std::stod(argv[++i]);
+            opts.input_mode = "static";
+        } else if (arg == "--static-voltage" && (i + 1) < argc) {
+            opts.static_voltage = std::stod(argv[++i]);
+            opts.input_mode = "static";
+        } else if (arg == "--static-power" && (i + 1) < argc) {
+            opts.static_power = std::stod(argv[++i]);
+            opts.input_mode = "static";
+        } else if (arg == "--static-irradiance" && (i + 1) < argc) {
+            opts.static_irradiance = std::stod(argv[++i]);
+            opts.input_mode = "static";
+        } else if (arg == "--static-cases" && (i + 1) < argc) {
+            opts.static_cases = std::stoi(argv[++i]);
+            opts.input_mode = "static";
+            if (opts.static_cases <= 0) {
+                throw std::invalid_argument("--static-cases must be greater than 0");
+            }
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             std::exit(0);
@@ -268,20 +323,43 @@ int main(int argc, char** argv) {
         // }
         // ====================================================================
         
-        // Load mission profile from two separate CSV files
-        const std::string environmental_csv = "simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv";
-        const std::string operating_csv = "simulator_inputs/mission_profile/operating_condition/operating_mission_profile.csv";
-        
-        std::vector<SimulationCase> all_cases = load_mission_profile(environmental_csv, operating_csv);
+        std::vector<SimulationCase> all_cases;
+        std::string input_description;
+
+        if (options.input_mode == "static") {
+            all_cases = create_static_mission_profile(
+                options.static_temperature,
+                options.static_rh,
+                options.static_voltage,
+                options.static_power,
+                options.static_cases,
+                options.static_irradiance
+            );
+            input_description = "static values";
+        } else if (!options.mission_csv_file.empty()) {
+            all_cases = load_mission_profile_csv(options.mission_csv_file);
+            input_description = options.mission_csv_file;
+        } else {
+            all_cases = load_mission_profile(options.environmental_csv_file, options.operating_csv_file);
+            input_description = options.environmental_csv_file + " + " + options.operating_csv_file;
+        }
         
         if (all_cases.empty()) {
-            std::string error_msg = "No simulation cases found after filtering. Check mission profile files:\n";
-            error_msg += "  " + environmental_csv + "\n";
-            error_msg += "  " + operating_csv;
+            std::string error_msg = "No simulation cases found after filtering. Check input: " + input_description;
             throw std::runtime_error(error_msg);
         }
         
-        std::cout << "\nMission Profile Loaded: " << all_cases.size() << " cases (after filtering GHI > 0 and ac_voltage > 0)" << std::endl;
+        std::cout << "\nSimulation Input Mode: " << options.input_mode << std::endl;
+        std::cout << "Input Source: " << input_description << std::endl;
+        if (options.input_mode == "static") {
+            std::cout << "  Temperature: " << options.static_temperature << " C" << std::endl;
+            std::cout << "  RH: " << options.static_rh << " %" << std::endl;
+            std::cout << "  Voltage: " << options.static_voltage << " V" << std::endl;
+            std::cout << "  Power: " << options.static_power << " W" << std::endl;
+            std::cout << "  Irradiance: " << options.static_irradiance << " W/m^2" << std::endl;
+        }
+        std::cout << "Mission Profile Loaded: " << all_cases.size()
+                  << " cases (after filtering GHI > 0 and ac_voltage > 0)" << std::endl;
         
         // ====================================================================
         // Section 4: Pre-load IV Curve Data for Mission Profile
@@ -839,9 +917,13 @@ int main(int argc, char** argv) {
                                     const UnifiedOutputs& outputs = batch_outputs.outputs[case_idx];
                                     stress = calculate_stress(outputs, params);
                                     
-                                    // Calculate AC power from I2 (grid-side inductor currents) and Vc (filter capacitor voltages)
-                                    ACPowerResults ac_power_results = calculate_ac_power(outputs, params);
-                                    ac_power = calculate_equivalent_ac_power(ac_power_results.p_AC_instantaneous);
+                                    if (sc.has_ac_power) {
+                                        ac_power = sc.ac_power;
+                                    } else {
+                                        // Calculate AC power from I2 (grid-side inductor currents) and Vc (filter capacitor voltages)
+                                        ACPowerResults ac_power_results = calculate_ac_power(outputs, params);
+                                        ac_power = calculate_equivalent_ac_power(ac_power_results.p_AC_instantaneous);
+                                    }
                                     
                                     // Store results after first iteration, or update results when iteration > 10
                                     if (actual_case_idx < static_cast<int>(stored_electrical_results.size())) {
@@ -927,7 +1009,7 @@ int main(int argc, char** argv) {
                                 static bool igbt_thermal_debug_printed = false;
                                 if (!igbt_thermal_debug_printed && case_idx == 0) {
                                     std::cerr << "DEBUG: IGBT thermal model output:" << std::endl;
-                                    std::cerr << "  AC power (calculated): " << ac_power << " W" << std::endl;
+                                    std::cerr << "  AC power (thermal input): " << ac_power << " W" << std::endl;
                                     std::cerr << "  Ambient temp: " << sc.ambient_temperature << " C" << std::endl;
                                     std::cerr << "  Junction temp: " << power_module_thermal.junction_temperature << " C" << std::endl;
                                     igbt_thermal_debug_printed = true;
@@ -1985,5 +2067,3 @@ int main(int argc, char** argv) {
     }
     return 0;
 }
-
-

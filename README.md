@@ -32,7 +32,7 @@ If `venv/` does not exist or is broken, create and populate it:
 python3 -m venv venv
 source venv/bin/activate
 python3 -m pip install --upgrade pip
-python3 -m pip install pandas requests numpy matplotlib
+python3 -m pip install -r requirements.txt
 ```
 
 The NSRDB download wrapper (`simulator_inputs/scripts/run_nrsdb.sh`) uses this project-level `venv/`.
@@ -48,6 +48,8 @@ python3 verify_database.py
 ```
 
 This creates `component_database/component_parameters.db`, loads component parameters (capacitor, fan, power module, PCB), and generates PV panel IV-curve lookup data from `pv_panel/*.json`.
+
+To replace an existing generated database, run `python3 initialize_all.py --force`.
 
 To regenerate PV performance data only:
 
@@ -79,8 +81,15 @@ make clean && make
 Mission profiles are loaded automatically from fixed paths (see [Running the Code](#running-the-code)). To download environmental data from NRSDB:
 
 ```bash
+cp .env.example .env
+# Edit .env with your NREL API key and contact email.
+source .env
 ./simulator_inputs/scripts/run_nrsdb.sh
 ```
+
+The credentials remain local because `.env` is excluded from Git. The download
+script recreates
+`simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv`.
 
 ---
 
@@ -113,13 +122,42 @@ Mission profiles are loaded automatically from fixed paths (see [Running the Cod
 | `--modulation` | `-m` | `svm` | Modulation strategy: `svm` or `spwm` |
 | `--ngpus` | `-g` | all available | Number of GPUs to use, or `all` |
 | `--model` | `-M` | `simulator_inputs/simulation_model/example_simulation_model.json` | Simulation model JSON with component part numbers |
+| `--input-mode` | | `mission` | Input mode: `mission` or `static` |
+| `--mission-csv` / `--csv` | `-c` | unset | Combined mission profile CSV |
+| `--environmental-csv` | | fixed default | Environmental CSV for split mission profile mode |
+| `--operating-csv` | | fixed default | Operating CSV for split mission profile mode |
+| `--static-temp` | | `95` | Static ambient temperature in Celsius |
+| `--static-rh` | | `95` | Static relative humidity in percent |
+| `--static-voltage` | | `500` | Static AC voltage RMS line-to-line in volts |
+| `--static-power` | | `300` | Static AC power in watts for the thermal model |
+| `--static-irradiance` | | `1000` | Static solar irradiance in W/m² |
+| `--static-cases` | | `1` | Number of repeated static cases |
 
-#### Automatically loaded inputs
+#### Input modes
 
-The simulator does **not** take a CSV path on the command line. Mission profiles are read from:
+Mission profile mode is the default. If no CSV path is supplied, mission profiles are read from:
 
 - `simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv`
 - `simulator_inputs/mission_profile/operating_condition/operating_mission_profile.csv`
+
+You can also pass one combined CSV with:
+
+```bash
+./bin/trace_pv --topology 3l2s --mission-csv simulator_inputs/mission_profile/year_long_mission_profile_2024.csv
+```
+
+Combined mission CSV columns:
+
+```text
+time,ambient_temperature,rh,GHI,ac_voltage[,ac_power]
+```
+
+Static mode creates repeated cases using one set of values. Defaults match the requested stress case: `temp=95`, `rh=95`, `voltage=500`, `power=300`.
+
+```bash
+./bin/trace_pv --topology 3l2s --input-mode static \
+  --static-temp 95 --static-rh 95 --static-voltage 500 --static-power 300
+```
 
 The simulation model JSON specifies component part numbers (capacitor, power module, fan, PCB, PV panel, etc.) that must exist in `component_database/`. See `simulator_inputs/simulation_model/README.md`.
 
@@ -132,6 +170,14 @@ The simulation model JSON specifies component part numbers (capacitor, power mod
 # Custom model, modulation, and GPU count
 ./bin/trace_pv --topology 2l2s --modulation spwm --ngpus 1 \
   --model simulator_inputs/simulation_model/example_simulation_model.json
+
+# Run a provided combined mission profile CSV
+./bin/trace_pv --topology 3l2s \
+  --mission-csv simulator_inputs/mission_profile/year_long_mission_profile_2024.csv
+
+# Run static stress conditions for all cases
+./bin/trace_pv --topology 3l2s --input-mode static \
+  --static-temp 95 --static-rh 95 --static-voltage 500 --static-power 300
 
 # Multiple rounds per iteration
 ./bin/trace_pv --topology 3l1s --rounds 6 --ngpus all
@@ -157,9 +203,9 @@ Output is written to `results/results_<timestamp>/`.
 
 ```bash
 make run TOPOLOGY=2l2s ROUNDS=1 MOD=svm NGPUS=1
+make run TOPOLOGY=3l2s CSV=simulator_inputs/mission_profile/year_long_mission_profile_2024.csv
+make run TOPOLOGY=3l2s MODE=static
 ```
-
-> **Note:** `make run` uses the legacy CSV-based interface and may differ from the current `trace_pv` CLI. Prefer `./bin/trace_pv` directly.
 
 ---
 
@@ -193,11 +239,11 @@ make run TOPOLOGY=2l2s ROUNDS=1 MOD=svm NGPUS=1
 
 ```
 TRACE-PV/
-├── bin/trace_pv              # Simulator executable (built by make)
-├── component_database/       # Component JSON files and SQLite database
+├── bin/                      # Generated simulator executable and objects
+├── component_database/       # Component JSON sources and database generators
 ├── simulator_inputs/         # Mission profiles and simulation model JSON
 ├── src/                      # C++/CUDA simulator source
-├── results/                  # Simulation output
+├── results/                  # Generated simulation output (not tracked)
 ├── setup_env.sh              # Runtime environment activation
 ├── Makefile                  # Build system
 └── run_all_configs.sh        # Batch simulation runner

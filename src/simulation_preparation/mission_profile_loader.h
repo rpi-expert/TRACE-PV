@@ -21,5 +21,27 @@ std::vector<SimulationCase> load_mission_profile(
     const std::string& operating_csv_path
 );
 
-#endif // MISSION_PROFILE_LOADER_H
+/**
+ * Load mission profile from one CSV file.
+ *
+ * Supported formats:
+ * - time,ambient_temperature,rh,GHI,ac_voltage[,ac_power]
+ * - ambient_temperature,solar_irradiance,ac_voltage
+ */
+std::vector<SimulationCase> load_mission_profile_csv(
+    const std::string& csv_path
+);
 
+/**
+ * Create repeated static simulation cases.
+ */
+std::vector<SimulationCase> create_static_mission_profile(
+    double ambient_temperature,
+    double rh,
+    double ac_voltage,
+    double ac_power,
+    int num_cases,
+    double solar_irradiance = 1000.0
+);
+
+#endif // MISSION_PROFILE_LOADER_H

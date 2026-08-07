@@ -5,12 +5,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VENV_PYTHON="${PROJECT_ROOT}/venv/bin/python3"
 
+if [ -z "${NREL_API_KEY:-}" ] || [ -z "${NREL_EMAIL:-}" ]; then
+    echo "Error: NREL_API_KEY and NREL_EMAIL must be set."
+    echo "Copy ${PROJECT_ROOT}/.env.example to ${PROJECT_ROOT}/.env, edit it, then run: source ${PROJECT_ROOT}/.env"
+    exit 1
+fi
+
 if [ ! -x "$VENV_PYTHON" ]; then
     echo "Error: Project virtual environment not found at ${PROJECT_ROOT}/venv"
-    echo "Please run: python3 -m venv ${PROJECT_ROOT}/venv && ${PROJECT_ROOT}/venv/bin/python3 -m pip install pandas requests"
+    echo "Please run: python3 -m venv ${PROJECT_ROOT}/venv && ${PROJECT_ROOT}/venv/bin/python3 -m pip install -r ${PROJECT_ROOT}/requirements.txt"
     exit 1
 fi
 
 # Run the script with the virtual environment's Python
 exec "$VENV_PYTHON" "${SCRIPT_DIR}/nrsdb.py" "$@"
-
