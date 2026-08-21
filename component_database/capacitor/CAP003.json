@@ -1,0 +1,20 @@
+{
+  "part_number": "Kemet_C44UQGT6420B8SX",
+  "capacitor_type": "FILM",
+  "voltage_type": "AC",
+  "coefficients": {
+    "A": 5874,
+    "n": 0.00,
+    "Ea": 0.306,
+    "beta": -0.02,
+    "V_rated": 1100,
+    "T_ref": 358.15,
+    "RH_ref": 70.0
+  },
+  "rth_amb": 0.48,
+  "rth_surf": 0.29,
+  "esr": 0.015,
+  "capacitance": 680e-6,
+  "description": "Solectria XGI 1500 Inverter - AC caps"
+}
+

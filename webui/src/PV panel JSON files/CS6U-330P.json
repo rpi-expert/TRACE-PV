@@ -1,0 +1,43 @@
+{
+    "PVpanel": {
+        "Vendor": "Canadian Solar",
+        "Part Number": "CS6U-330P",
+        "Voc (V)": 45.6,  
+        "Isc (A)": 9.45,  
+        "Vmp (V)": 37.2,
+        "Imp (A)": 8.88,
+        "Pmax (W)": 330.0,
+        "Efficiency(%)": 16.97,
+        "Conditions": " 1000 W/m2, 25\u00b0C, AM1.5",
+        "Tk Pmax (%/\u00b0C)": -0.41,
+        "Tk Voc (%/\u00b0C)": -0.31, 
+        "Tk Isc (%/\u00b0C)": 0.053, 
+        "@ -40 \u00b0C (W)": 417.95,
+        "@ 60 \u00b0C (W)": 282.65,
+        "modules in series as string": 1,
+        "strings in parallel as the array": 0,
+        "Voc_string -40\u00b0C (V)": 54.79,
+        "Voc_string 60\u00b0C (V)": 40.65,
+        "Isc_string -40\u00b0C (A)": 9.12,
+        "Isc_string 60\u00b0C (A)": 9.63,
+        "Pmax_string -40\u00b0C (W)": 417.95,
+        "Pmax_string 60\u00b0C (W)": 282.65,
+        "Size (cells)": 72,
+        "(W)/cell": 4.58,
+        "Dimensions (mm)": "1960 x 992 x 40",
+        "Weight (kg)": 22.4,
+        "Vsys,max (VDC)": "1000.0",
+        "Iser,max (A)": 15,
+        "Cell Type": "Poly-crystalline",
+        "Frame Material": "Aluminum, anodized alloy",
+        "IL": 9.4605,
+        "I0": 4.8779e-11,
+        "DI_factor": 0.94901,
+        "Rs": 0.34751,
+        "Rsh": 311.8211,
+        "Nmodule": 5,
+        "Nstring": 66
+
+
+    }
+}

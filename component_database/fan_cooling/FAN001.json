@@ -1,0 +1,14 @@
+{
+  "part_number": "NMB 09238RE-24N-GU",
+  "electrical_coefficients": {
+    "A": 1e-3,
+    "n": -3.06,
+    "Ea": 0.8581
+  },
+  "mechanical_coefficients": {
+    "A": 671027,
+    "c": -0.04
+  },
+  "description": "Solectria Cooling Fan"
+}
+

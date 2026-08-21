@@ -1,0 +1,20 @@
+{
+  "part_number": "TDK_B32758S3306K504",
+  "capacitor_type": "FILM",
+  "voltage_type": "AC",
+  "coefficients": {
+    "A": 5874,
+    "n": 1.2,
+    "Ea": 0.549,
+    "beta": -0.01,
+    "V_rated": 310,
+    "T_ref": 333.15,
+    "RH_ref": 95.0
+  },
+  "rth_amb": 0.55,
+  "rth_surf": 0.33,
+  "esr": 0.009,
+  "capacitance": 220e-6,
+  "description": "Solectria XGI 1500 Inverter - AC caps"
+}
+

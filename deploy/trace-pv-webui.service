@@ -1,0 +1,16 @@
+[Unit]
+Description=TRACE-PV WebUI and simulation API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/TRACE-PV/webui
+ExecStart=/usr/bin/python3 /root/TRACE-PV/webui/server.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=TRACEPV_WEBUI_HOST=0.0.0.0
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+.DS_Store
+._*
+**/._*
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+**/venv/
+
+# Node.js / WebUI
+node_modules/
+webui/build/
+webui/runs/
+
+# C++ / CUDA build products
+bin/
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+
+# Simulator-generated data
+logs/
+outputs/
+results/
+*.log
+*.err
+*.out
+plots/*.png
+
+# Local duplicate/development database
+component_database/components.db

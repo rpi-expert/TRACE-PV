@@ -1,0 +1,21 @@
+{
+  "part_number": "F3L75R12W1H3_B11",
+  "type": "T-Type",
+  "coefficients": {
+    "deltaT_model": {
+      "A": 3e4,
+      "n": 3.476,
+      "Ea": 0.042
+    },
+    "arrhenius_model": {
+      "A": 809.374,
+      "n1": 4.64,
+      "n2": -2.2,
+      "Ea": 0.95,
+      "RH_ref": 95,
+      "T_ref": 348.15,
+      "V_ref": 800
+    }
+  },
+  "description": "SMA IGBT power module"
+}

@@ -1,0 +1,34 @@
+{
+  "simulation_model": {
+    "description": "Example simulation model with component part numbers",
+    "capacitor": {
+      "part_number": "Rubycon_475VXG330MEFCSN30X55",
+      "description": "Main DC-link capacitor - Aluminum Electrolytic"
+    },
+    "power_module": {
+      "part_number": "F3L75R12W1H3_B11",
+      "description": "IGBT power module for inverter (SMA IGBT)"
+    },
+    "fan_cooling": {
+      "part_number": "NMB 09238RE-24N-GU",
+      "description": "Cooling fan for thermal management"
+    },
+    "pcb": {
+      "part_number": "PCB001",
+      "description": "PCB for SMA Inverter"
+    },
+    "pv_panel": {
+      "part_number": "CS6U-330P",
+      "description": "PV panel for solar energy generation"
+    },
+    "pv_inverter": {
+      "part_number": "SMA_Sunny_Tripower_30000TL-US-10",
+      "description": "PV inverter with boost stage"
+    },
+    "grid": {
+      "part_number": "GRID001",
+      "description": "Grid connection parameters"
+    }
+  }
+}
+

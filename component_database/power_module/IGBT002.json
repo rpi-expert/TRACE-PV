@@ -1,0 +1,21 @@
+{
+  "part_number": "F3L200R12W2H3_B11",
+  "type": "T-Type",
+  "coefficients": {
+    "deltaT_model": {
+      "A": 3e4,
+      "n": -3.22,
+      "Ea": 0.042
+    },
+    "arrhenius_model": {
+      "A": 259.6930,
+      "n1": 2.66,
+      "n2": -2.2,
+      "Ea": 0.79,
+      "RH_ref": 95,
+      "T_ref": 348.15,
+      "V_ref": 800
+    }
+  },
+  "description": "Solectira IGBT power module"
+}

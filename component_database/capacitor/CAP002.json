@@ -1,0 +1,20 @@
+{
+  "part_number": "Kemet C4AF9EW5330A3AK",
+  "capacitor_type": "FILM",
+  "voltage_type": "DC",
+  "coefficients": {
+    "A": 5874,
+    "n": 3.63,
+    "Ea": 0.55,
+    "beta": -0.05,
+    "V_rated": 240,
+    "T_ref": 358.15,
+    "RH_ref": 85.0
+  },
+  "rth_amb": 0.52,
+  "rth_surf": 0.31,
+  "esr": 0.008,
+  "capacitance": 470e-6,
+  "description": "Solectria XGI 1500 Inverter - DC caps"
+}
+
