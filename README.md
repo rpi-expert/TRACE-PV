@@ -208,16 +208,16 @@ make run TOPOLOGY=3l2s MODE=static
 ### Simulator
 
 - [x] Electrical Simulation
-- [ ] Loss Simulation
-- [ ] Thermal Simulation
-- [ ] Environmental Simulation
+- [x] Loss Simulation
+- [x] Thermal Simulation
+- [x] Environmental Simulation
 
 ### Model Validation
 
-- [ ] Electrical Simulation
-- [ ] Loss Simulation
-- [ ] Thermal Simulation
-- [ ] Environmental Simulation
+- [x] Electrical Simulation
+- [x] Loss Simulation
+- [x] Thermal Simulation
+- [x] Environmental Simulation
 
 ---
 
