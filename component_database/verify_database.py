@@ -17,7 +17,9 @@ COMPONENT_FOLDERS = {
     "capacitor": "capacitor",
     "fan_cooling": "fan_cooling",
     "power_module": "power_module",
-    "pcb": "pcb"
+    "pcb": "pcb",
+    "pv_inverter": "pv_inverter",
+    "grid": "grid",
 }
 
 # PV system folder
@@ -41,6 +43,8 @@ def verify_component(conn, component_type, json_dir):
             with open(json_file, 'r') as f:
                 data = json.load(f)
                 part_number = data.get('part_number')
+                if component_type == "grid" and not part_number:
+                    part_number = json_file.stem
                 if part_number:
                     json_parts[part_number] = json_file.name
         except Exception as e:
@@ -121,7 +125,7 @@ def main():
     
     if not db_path.exists():
         print(f"Error: Database {DB_FILE} does not exist.")
-        print("Please run init_database.py first.")
+        print("Please run initialize_all.py first.")
         return 1
     
     # Connect to database
@@ -138,6 +142,7 @@ def main():
             
             if not json_dir.exists():
                 print(f"\n{component_type.upper()}: Directory not found: {json_dir}")
+                all_ok = False
                 continue
             
             print(f"\n{component_type.upper()}:")
@@ -169,20 +174,26 @@ def main():
             
             if not pv_result['table_exists']:
                 print(f"  WARNING: PV performance table does not exist.")
-                print(f"  Run init_pv_performance_table.py to create it.")
+                print(f"  Run initialize_all.py to create and populate it.")
+                all_ok = False
             else:
                 print(f"  Total panels in database: {pv_result['total_in_db']}")
                 print(f"  Total panel JSON files: {pv_result['total_in_files']}")
                 
                 if pv_result['missing_in_db']:
                     print(f"  NOTE: {len(pv_result['missing_in_db'])} panel JSON files found but no data in database.")
-                    print(f"  These panels need to be processed by offline_data_generator.")
+                    print(f"  These panels need to be processed by initialize_all.py.")
                     print(f"  First 5: {', '.join([pn for pn, _ in pv_result['missing_in_db'][:5]])}")
+                    all_ok = False
                 
                 if pv_result['in_db_not_in_files']:
                     print(f"  WARNING: {len(pv_result['in_db_not_in_files'])} panels in DB but JSON files not found:")
                     for pn in list(pv_result['in_db_not_in_files'])[:5]:
                         print(f"    - {pn}")
+                    all_ok = False
+        else:
+            print(f"\nPV SYSTEM: Directory not found: {pv_dir}")
+            all_ok = False
         
         print("\n" + "=" * 60)
         if all_ok:
@@ -190,7 +201,7 @@ def main():
             return 0
         else:
             print("VERIFICATION FAILED: Some component files are missing.")
-            print("Please run init_database.py to update the database.")
+            print("Please run initialize_all.py --force to rebuild the database.")
             return 1
         
     finally:
@@ -198,4 +209,3 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
-

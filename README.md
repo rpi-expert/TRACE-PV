@@ -39,15 +39,32 @@ The NSRDB download wrapper (`simulator_inputs/scripts/run_nrsdb.sh`) uses this p
 
 ### 3. Initialize the component database
 
-First-time setup (or after adding new component JSON files):
+From the project root, run the unified initializer:
+
+```bash
+python3 component_database/initialize_all.py
+```
+
+The command is safe to run again: it skips component and PV data that is
+already complete. To rebuild the database after changing component or PV JSON
+files, use:
+
+```bash
+python3 component_database/initialize_all.py --force
+```
+
+Verify the resulting database independently with:
 
 ```bash
 cd component_database
-python3 initialize_all.py
 python3 verify_database.py
 ```
 
-This creates `component_database/component_parameters.db`, loads component parameters (capacitor, fan, power module, PCB), and generates PV panel IV-curve lookup data from `pv_panel/*.json`.
+The initializer creates `component_database/component_parameters.db`, loads all
+component parameters, and invokes the checked-in Python PV generator to build
+the IV-curve lookup data from `pv_panel/*.json`. It does not require a compiled
+database-generation helper, and it returns a non-zero exit code if component
+loading, PV generation, or verification fails.
 
 To regenerate PV performance data only:
 
@@ -64,7 +81,22 @@ See `component_database/INITIALIZATION_GUIDE.md` for details.
 make
 ```
 
-The Makefile auto-detects the GPU compute capability (for example, `sm_90` for H200) and uses the system SQLite development library. A project-local SQLite installation under `sqlite3/` is still detected when supplied separately.
+The Makefile honors `NVCC` from the command line or environment. If `NVCC` is
+unset, it searches `PATH` and then falls back to `CUDA_PATH/bin/nvcc`;
+`CUDA_HOME` is also accepted as the default CUDA path. For example:
+
+```bash
+export NVCC=/opt/cuda/bin/nvcc
+make
+
+# Equivalent one-command override
+make NVCC=/opt/cuda/bin/nvcc
+```
+
+The Makefile also auto-detects the GPU compute capability (for example,
+`sm_90` for H200) and uses the system SQLite development library. A
+project-local SQLite installation under `sqlite3/` is still detected when
+supplied separately.
 
 ### 5. Prepare mission profile inputs (optional)
 

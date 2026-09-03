@@ -1,5 +1,8 @@
-CUDA_PATH ?= /usr/local/cuda
+CUDA_PATH ?= $(if $(CUDA_HOME),$(CUDA_HOME),/usr/local/cuda)
+NVCC      ?= $(shell command -v nvcc 2>/dev/null)
+ifeq ($(strip $(NVCC)),)
 NVCC      := $(CUDA_PATH)/bin/nvcc
+endif
 GPU_SM    ?= $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
 NVCC_ARCH := $(if $(GPU_SM),-arch=sm_$(GPU_SM),)
 

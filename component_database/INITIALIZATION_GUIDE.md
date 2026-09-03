@@ -9,12 +9,22 @@ cd component_database
 python3 initialize_all.py
 ```
 
+To discard and rebuild an existing database after changing JSON inputs:
+
+```bash
+python3 initialize_all.py --force
+```
+
 This single command will:
-1. Check if database exists (skip if valid)
+1. Check whether the database and component records are complete
 2. Initialize/create all database tables
-3. Load all component JSON files (capacitor, fan, PCB, power module)
-4. Run offline training for all PV panels
+3. Load all component JSON files
+4. Run the checked-in Python offline generator for all PV panels
 5. Insert PV performance data into database
+6. Verify that every component and PV panel is present
+
+The script exits with a non-zero status if any stage fails. It does not depend
+on the legacy compiled `offline_data_generator` executable.
 
 ## What It Does
 
@@ -35,8 +45,8 @@ Automatically loads all JSON files from:
 - `pcb/*.json`
 
 ### 3. PV Panel Offline Training
-- Builds `offline_data_generator` if needed
-- Processes all JSON files from `pv_system/*.json`
+- Runs `offline_trainning/offline_data_generator.py` with the active Python interpreter
+- Processes all JSON files from `pv_panel/*.json`
 - Generates IV curves for grid conditions:
   - Irradiance: 0-1000 W/m² (step: 100)
   - Temperature: 0-60°C (step: 5)
@@ -100,19 +110,19 @@ This will check:
 - PV training will still run if data is missing
 
 ### Offline Training Fails
-- Make sure `offline_trainning/offline_data_generator` is built:
+- Run the Python generator directly to inspect its error:
   ```bash
-  cd offline_trainning
-  make
+  python3 offline_trainning/offline_data_generator.py \
+    component_parameters.db pv_panel
   ```
 
 ### Missing Components
 - Add JSON files to appropriate folders
-- Re-run `initialize_all.py` (it updates existing entries)
+- Rebuild and verify the database with `python3 initialize_all.py --force`
 
 ### Missing PV Panels
-- Add JSON files to `pv_system/` folder
-- Re-run initialization (will only process new panels)
+- Add JSON files to the `pv_panel/` folder
+- Rebuild and verify the database with `python3 initialize_all.py --force`
 
 ## File Structure
 
@@ -125,9 +135,9 @@ component_database/
 ├── fan_cooling/               # Fan cooling JSON files
 ├── power_module/              # Power module JSON files
 ├── pcb/                       # PCB JSON files
-├── pv_system/                 # PV panel JSON files
+├── pv_panel/                  # PV panel JSON files
 └── offline_trainning/         # PV offline training tools
-    ├── offline_data_generator
-    └── ...
+    ├── offline_data_generator.py
+    ├── pv_performance_db.py
+    └── single_diode_model.py
 ```
-
