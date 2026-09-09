@@ -65,6 +65,16 @@ const degradationItems = [
   { key: 'pcb', label: 'PCB Considering Temperature and Temeparture varianc', chartLabel: 'PCB · T & T Variance' },
 ];
 
+const componentConfigurationItems = [
+  { key: 'pv_panel', label: 'PV Panel' },
+  { key: 'pv_inverter', label: 'PV Inverter' },
+  { key: 'grid', label: 'Grid' },
+  { key: 'power_module', label: 'Power Module' },
+  { key: 'capacitor', label: 'Capacitor' },
+  { key: 'fan_cooling', label: 'Cooling Fan' },
+  { key: 'pcb', label: 'PCB' },
+];
+
 function statusText(status) {
   return {
     idle: 'Idle',
@@ -100,20 +110,24 @@ function degradationPercent(value) {
   return `${(clamped * 100).toFixed(2)}%`;
 }
 
-function thermalActionText(action) {
-  return {
-    initial: 'Initial one-year run',
-    updated: 'Updated thermal parameters',
-    rerun: 'Critical-degradation rerun',
-    reuse: 'Cached reuse',
-  }[action] || 'Waiting';
-}
-
 function Metric({ label, value, unit, formatter }) {
   return (
     <div className="metric">
       <span>{label}</span>
       <strong>{formatter ? formatter(value) : fieldValue(value, unit)}</strong>
+    </div>
+  );
+}
+
+function ComponentConfiguration({ configuration = {} }) {
+  return (
+    <div className="component-configuration">
+      {componentConfigurationItems.map((item) => (
+        <div className="component-configuration-row" key={item.key}>
+          <span>{item.label}</span>
+          <strong>{configuration[item.key] || '-'}</strong>
+        </div>
+      ))}
     </div>
   );
 }
@@ -276,15 +290,9 @@ function SimulatorDashboard() {
   const [error, setError] = useState('');
 
   const isRunning = job.status === 'running' || job.status === 'queued';
-  const isTerminal = ['completed', 'failed', 'stopped'].includes(job.status);
   const result = job.result || {};
   const degradation = result.degradation || {};
-  const activeYear = isTerminal ? '-' : (result.current_year || job.iteration || '-');
-  const activeRound = isTerminal
-    ? '-'
-    : (result.round_total
-      ? `${result.current_round || 0} / ${result.round_total}`
-      : (result.current_round || '-'));
+  const componentConfiguration = job.component_configuration || {};
 
   useEffect(() => {
     if (!jobId) return undefined;
@@ -457,23 +465,17 @@ function SimulatorDashboard() {
 
         <section className="panel progress">
           <div className="section-title">
-            <h2>Progress</h2>
-            <span>{statusText(job.status)}</span>
+            <h2>Results</h2>
           </div>
-          <div className="grid two metrics-grid">
-            <Metric label="Job ID" value={jobId || '-'} />
-            <Metric label="Exit code" value={job.exit_code ?? '-'} />
-            <Metric label="Active year / iteration" value={activeYear} />
-            <Metric label="Completed years" value={result.simulated_years ?? 0} />
-            <Metric label="Active round" value={activeRound} />
-            <Metric label="Completed round" value={result.round_total ? `${result.completed_round || 0} / ${result.round_total}` : (result.completed_round || '-')} />
-            <Metric label="Thermal simulation" value={thermalActionText(result.thermal_action)} />
-            <Metric label="Thermal reruns" value={result.thermal_reruns ?? 0} />
-            <Metric label="Wall duration" value={result.duration_seconds} formatter={formatDuration} />
-          </div>
-          <h2 className="subhead" id="degradation-results">Accumulated Degradation</h2>
+          <h2 className="subhead">Component Configuration</h2>
+          <ComponentConfiguration configuration={componentConfiguration} />
+          <h2 className="subhead" id="degradation-results">Degradation (1 / lifetime)</h2>
           <DegradationBars degradation={degradation} />
           <DegradationHistory history={result.degradation_history || []} />
+          <h2 className="subhead">Execution Time</h2>
+          <div className="execution-time">
+            <Metric label="Wall duration" value={result.duration_seconds} formatter={formatDuration} />
+          </div>
         </section>
       </section>
 

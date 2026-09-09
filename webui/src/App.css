@@ -224,6 +224,38 @@ h2 {
   margin-bottom: 14px;
 }
 
+.component-configuration {
+  display: grid;
+  gap: 8px;
+}
+
+.component-configuration-row {
+  align-items: baseline;
+  background: #f6f9fa;
+  border: 1px solid #e2eaec;
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(100px, 0.7fr) minmax(0, 1.3fr);
+  padding: 10px 12px;
+}
+
+.component-configuration-row span {
+  color: #687579;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.component-configuration-row strong {
+  color: #163d45;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.execution-time {
+  max-width: 320px;
+}
+
 .metric {
   display: flex;
   align-items: baseline;

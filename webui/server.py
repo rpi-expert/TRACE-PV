@@ -20,6 +20,16 @@ RUN_DIR = WEBUI_DIR / "runs"
 SIM_BINARY = PROJECT_ROOT / "bin" / "trace_pv"
 RUN_DIR.mkdir(exist_ok=True)
 
+COMPONENT_CONFIGURATION_FIELDS = (
+    "pv_panel",
+    "pv_inverter",
+    "grid",
+    "power_module",
+    "capacitor",
+    "fan_cooling",
+    "pcb",
+)
+
 DEFAULT_SIMULATION_INPUT = {
     "topology": "3l2s",
     "inputMode": "mission",
@@ -40,6 +50,31 @@ DEFAULT_SIMULATION_INPUT = {
 
 JOBS = {}
 LOCK = threading.Lock()
+
+
+def load_component_configuration(model_file):
+    """Return the part numbers actually selected by the simulator model JSON."""
+    model_path = Path(str(model_file))
+    if not model_path.is_absolute():
+        model_path = PROJECT_ROOT / model_path
+    try:
+        document = json.loads(model_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+    model = document.get("simulation_model")
+    if not isinstance(model, dict):
+        return {}
+
+    configuration = {}
+    for component in COMPONENT_CONFIGURATION_FIELDS:
+        entry = model.get(component)
+        if not isinstance(entry, dict):
+            continue
+        part_number = entry.get("part_number")
+        if isinstance(part_number, str) and part_number.strip():
+            configuration[component] = part_number.strip()
+    return configuration
 
 
 def _float(value):
@@ -659,6 +694,9 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 payload = self._read_json()
                 args, max_iterations = build_args(payload)
+                component_configuration = load_component_configuration(
+                    payload.get("model", DEFAULT_SIMULATION_INPUT["model"])
+                )
                 job_id = uuid.uuid4().hex[:12]
                 log_path = RUN_DIR / f"{job_id}.log"
                 with LOCK:
@@ -674,6 +712,7 @@ class Handler(SimpleHTTPRequestHandler):
                         "ended_at": None,
                         "args": args,
                         "toolbox_inputs": payload.get("toolboxInputs", {}),
+                        "component_configuration": component_configuration,
                         "max_iterations": max_iterations,
                         "log_path": log_path,
                         "process": None,
