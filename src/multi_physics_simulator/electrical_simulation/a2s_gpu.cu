@@ -33,6 +33,11 @@ constexpr double PI = 3.14159265358979323846;
 constexpr int MAX_A2S_STATES = 12;
 constexpr int MAX_STAGE1_INTERVALS = 7;
 constexpr int MAX_STAGE2_INTERVALS = 8;
+// Packed device-to-host validation buffer: [solve_valid, D_d, D_q, x_dq_ss...].
+constexpr int AVERAGE_MODEL_VALID_OFFSET = 0;
+constexpr int AVERAGE_MODEL_DUTY_D_OFFSET = 1;
+constexpr int AVERAGE_MODEL_DUTY_Q_OFFSET = 2;
+constexpr int AVERAGE_MODEL_STATE_OFFSET = 3;
 
 struct Stage1ScheduleGpu {
     double boundaries[MAX_STAGE1_INTERVALS + 1];
@@ -54,7 +59,7 @@ struct Stage2ScheduleGpu {
     } while (false)
 
 // Device-side linear system solver for steady-state calculation
-__device__ void solve_linear_system_device(const double* A_data,
+__device__ bool solve_linear_system_device(const double* A_data,
                                            const double* b_data,
                                            double* x_data,
                                            int n) {
@@ -93,7 +98,7 @@ __device__ void solve_linear_system_device(const double* A_data,
         // Eliminate
         for (int i = k + 1; i < n; ++i) {
             if (fabs(aug[k][k]) < 1e-15) {
-                return; // Singular matrix
+                return false; // Singular matrix
             }
             double factor = aug[i][k] / aug[k][k];
             for (int j = k; j <= n; ++j) {
@@ -109,10 +114,11 @@ __device__ void solve_linear_system_device(const double* A_data,
             sum -= aug[i][j] * x_data[j];
         }
         if (fabs(aug[i][i]) < 1e-15) {
-            return; // Singular matrix
+            return false; // Singular matrix
         }
         x_data[i] = sum / aug[i][i];
     }
+    return true;
 }
 
 // Compute D_d and D_q from reference voltage magnitude and phase shift
@@ -138,10 +144,10 @@ __device__ void compute_dq_duties_device(const SimulationParameters& params,
 }
 
 // Solve steady-state for two-level stage 1
-__device__ void solve_two_level_stage1_steady_state_device(const SimulationParameters& params,
-                                                            double D_d,
-                                                            double D_q,
-                                                            double* x_ss) {
+__device__ bool solve_two_level_stage1_steady_state_device(const SimulationParameters& params,
+                                                           double D_d,
+                                                           double D_q,
+                                                           double* x_ss) {
     const int n = 6;
     double A[36]; // 6x6
     double B[6];
@@ -180,19 +186,20 @@ __device__ void solve_two_level_stage1_steady_state_device(const SimulationParam
     B[3] = -v_Gq / L2;
     
     // Solve: x_ss = -A^(-1) * B
-    double x[6];
-    solve_linear_system_device(A, B, x, n);
+    double x[6] = {};
+    const bool solved = solve_linear_system_device(A, B, x, n);
     for (int i = 0; i < n; ++i) {
         x_ss[i] = -x[i];
     }
+    return solved;
 }
 
 // Solve steady-state for two-level stage 2
-__device__ void solve_two_level_stage2_steady_state_device(const SimulationParameters& params,
-                                                            double dboost,
-                                                            double D_d,
-                                                            double D_q,
-                                                            double* x_ss) {
+__device__ bool solve_two_level_stage2_steady_state_device(const SimulationParameters& params,
+                                                           double dboost,
+                                                           double D_d,
+                                                           double D_q,
+                                                           double* x_ss) {
     const int n = 8;
     double A[64]; // 8x8
     double B[8];
@@ -234,18 +241,19 @@ __device__ void solve_two_level_stage2_steady_state_device(const SimulationParam
     B[6] = params.v_pv / Lb;
     
     // Solve: x_ss = -A^(-1) * B
-    double x[8];
-    solve_linear_system_device(A, B, x, n);
+    double x[8] = {};
+    const bool solved = solve_linear_system_device(A, B, x, n);
     for (int i = 0; i < n; ++i) {
         x_ss[i] = -x[i];
     }
+    return solved;
 }
 
 // Solve steady-state for three-level stage 1
-__device__ void solve_three_level_stage1_steady_state_device(const SimulationParameters& params,
-                                                              double D_d,
-                                                              double D_q,
-                                                              double* x_ss) {
+__device__ bool solve_three_level_stage1_steady_state_device(const SimulationParameters& params,
+                                                             double D_d,
+                                                             double D_q,
+                                                             double* x_ss) {
     const int n = 6;
     double A[36];
     double B[6];
@@ -284,19 +292,20 @@ __device__ void solve_three_level_stage1_steady_state_device(const SimulationPar
     B[3] = -v_Gq / L2;
     
     // Solve: x_ss = -A^(-1) * B
-    double x[6];
-    solve_linear_system_device(A, B, x, n);
+    double x[6] = {};
+    const bool solved = solve_linear_system_device(A, B, x, n);
     for (int i = 0; i < n; ++i) {
         x_ss[i] = -x[i];
     }
+    return solved;
 }
 
 // Solve steady-state for three-level stage 2
-__device__ void solve_three_level_stage2_steady_state_device(const SimulationParameters& params,
-                                                              double dboost,
-                                                              double D_d,
-                                                              double D_q,
-                                                              double* x_ss) {
+__device__ bool solve_three_level_stage2_steady_state_device(const SimulationParameters& params,
+                                                             double dboost,
+                                                             double D_d,
+                                                             double D_q,
+                                                             double* x_ss) {
     const int n = 8;
     double A[64];
     double B[8];
@@ -339,11 +348,12 @@ __device__ void solve_three_level_stage2_steady_state_device(const SimulationPar
     B[6] = params.v_pv / Lb;
     
     // Solve: x_ss = -A^(-1) * B
-    double x[8];
-    solve_linear_system_device(A, B, x, n);
+    double x[8] = {};
+    const bool solved = solve_linear_system_device(A, B, x, n);
     for (int i = 0; i < n; ++i) {
         x_ss[i] = -x[i];
     }
+    return solved;
 }
 
 // Convert dq to abc
@@ -795,7 +805,8 @@ __global__ void unified_kernel_two_level_stage1(SimulationParameters params,
                                                 double dt,
                                                 double* output_states,
                                                 double* output_time_points,
-                                                int* output_switching_states) {
+                                                int* output_switching_states,
+                                                double* output_average_model) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_samples) {
         return;
@@ -825,8 +836,19 @@ __global__ void unified_kernel_two_level_stage1(SimulationParameters params,
     double D_d_0, D_q_0;
     compute_dq_duties_device(params, 0.0, D_d_0, D_q_0);
     
-    double x_dq_ss[8]; // Max 8 states for dq - steady-state computed once
-    solve_two_level_stage1_steady_state_device(params, D_d_0, D_q_0, x_dq_ss);
+    double x_dq_ss[8] = {}; // Max 8 states for dq - steady-state computed once
+    const bool average_model_solved =
+        solve_two_level_stage1_steady_state_device(params, D_d_0, D_q_0, x_dq_ss);
+
+    if (idx == 0) {
+        output_average_model[AVERAGE_MODEL_VALID_OFFSET] =
+            average_model_solved ? 1.0 : 0.0;
+        output_average_model[AVERAGE_MODEL_DUTY_D_OFFSET] = D_d_0;
+        output_average_model[AVERAGE_MODEL_DUTY_Q_OFFSET] = D_q_0;
+        for (int i = 0; i < 6; ++i) {
+            output_average_model[AVERAGE_MODEL_STATE_OFFSET + i] = x_dq_ss[i];
+        }
+    }
     
     // Convert steady-state dq to abc at period_start (initial condition for A2S)
     double x_abc_avg_start[MAX_A2S_STATES];
@@ -914,7 +936,8 @@ __global__ void unified_kernel_two_level_stage2(SimulationParameters params,
                                                 double dt,
                                                 double* output_states,
                                                 double* output_time_points,
-                                                int* output_switching_states) {
+                                                int* output_switching_states,
+                                                double* output_average_model) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_samples) {
         return;
@@ -943,8 +966,20 @@ __global__ void unified_kernel_two_level_stage2(SimulationParameters params,
     double D_d_0, D_q_0;
     compute_dq_duties_device(params, 0.0, D_d_0, D_q_0);
     
-    double x_dq_ss[8];
-    solve_two_level_stage2_steady_state_device(params, params.boost_duty, D_d_0, D_q_0, x_dq_ss);
+    double x_dq_ss[8] = {};
+    const bool average_model_solved =
+        solve_two_level_stage2_steady_state_device(
+            params, params.boost_duty, D_d_0, D_q_0, x_dq_ss);
+
+    if (idx == 0) {
+        output_average_model[AVERAGE_MODEL_VALID_OFFSET] =
+            average_model_solved ? 1.0 : 0.0;
+        output_average_model[AVERAGE_MODEL_DUTY_D_OFFSET] = D_d_0;
+        output_average_model[AVERAGE_MODEL_DUTY_Q_OFFSET] = D_q_0;
+        for (int i = 0; i < 8; ++i) {
+            output_average_model[AVERAGE_MODEL_STATE_OFFSET + i] = x_dq_ss[i];
+        }
+    }
     
     double x_abc_avg_start[MAX_A2S_STATES];
     convert_dq_to_abc_device(x_dq_ss, params, period_start, x_abc_avg_start);
@@ -1021,7 +1056,8 @@ __global__ void unified_kernel_three_level_stage1(SimulationParameters params,
                                                    double dt,
                                                    double* output_states,
                                                    double* output_time_points,
-                                                   int* output_switching_states) {
+                                                   int* output_switching_states,
+                                                   double* output_average_model) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_samples) {
         return;
@@ -1050,8 +1086,19 @@ __global__ void unified_kernel_three_level_stage1(SimulationParameters params,
     double D_d_0, D_q_0;
     compute_dq_duties_device(params, 0.0, D_d_0, D_q_0);
     
-    double x_dq_ss[8];
-    solve_three_level_stage1_steady_state_device(params, D_d_0, D_q_0, x_dq_ss);
+    double x_dq_ss[8] = {};
+    const bool average_model_solved =
+        solve_three_level_stage1_steady_state_device(params, D_d_0, D_q_0, x_dq_ss);
+
+    if (idx == 0) {
+        output_average_model[AVERAGE_MODEL_VALID_OFFSET] =
+            average_model_solved ? 1.0 : 0.0;
+        output_average_model[AVERAGE_MODEL_DUTY_D_OFFSET] = D_d_0;
+        output_average_model[AVERAGE_MODEL_DUTY_Q_OFFSET] = D_q_0;
+        for (int i = 0; i < 6; ++i) {
+            output_average_model[AVERAGE_MODEL_STATE_OFFSET + i] = x_dq_ss[i];
+        }
+    }
     
     double x_abc_avg_start[MAX_A2S_STATES];
     convert_dq_to_abc_device(x_dq_ss, params, period_start, x_abc_avg_start);
@@ -1126,7 +1173,8 @@ __global__ void unified_kernel_three_level_stage2(SimulationParameters params,
                                                   double dt,
                                                   double* output_states,
                                                   double* output_time_points,
-                                                  int* output_switching_states) {
+                                                  int* output_switching_states,
+                                                  double* output_average_model) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_samples) {
         return;
@@ -1155,8 +1203,20 @@ __global__ void unified_kernel_three_level_stage2(SimulationParameters params,
     double D_d_0, D_q_0;
     compute_dq_duties_device(params, 0.0, D_d_0, D_q_0);
     
-    double x_dq_ss[8];
-    solve_three_level_stage2_steady_state_device(params, params.boost_duty, D_d_0, D_q_0, x_dq_ss);
+    double x_dq_ss[8] = {};
+    const bool average_model_solved =
+        solve_three_level_stage2_steady_state_device(
+            params, params.boost_duty, D_d_0, D_q_0, x_dq_ss);
+
+    if (idx == 0) {
+        output_average_model[AVERAGE_MODEL_VALID_OFFSET] =
+            average_model_solved ? 1.0 : 0.0;
+        output_average_model[AVERAGE_MODEL_DUTY_D_OFFSET] = D_d_0;
+        output_average_model[AVERAGE_MODEL_DUTY_Q_OFFSET] = D_q_0;
+        for (int i = 0; i < 8; ++i) {
+            output_average_model[AVERAGE_MODEL_STATE_OFFSET + i] = x_dq_ss[i];
+        }
+    }
     
     double x_abc_avg_start[MAX_A2S_STATES];
     convert_dq_to_abc_device(x_dq_ss, params, period_start, x_abc_avg_start);
@@ -1656,6 +1716,24 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params) {
 }
 
 UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecision precision) {
+    int expected_num_states = 0;
+    if ((params.topology_level == 2 || params.topology_level == 3) &&
+        params.model_stage == 1) {
+        expected_num_states = 9;
+    } else if (params.topology_level == 2 && params.model_stage == 2) {
+        expected_num_states = 11;
+    } else if (params.topology_level == 3 && params.model_stage == 2) {
+        expected_num_states = 12;
+    } else {
+        throw std::invalid_argument("Unsupported A2S topology/stage combination");
+    }
+    if (params.num_states != expected_num_states) {
+        throw std::invalid_argument(
+            "A2S num_states does not match topology/stage: expected " +
+            std::to_string(expected_num_states) + ", got " +
+            std::to_string(params.num_states));
+    }
+
     const int periods = compute_period_count(params);
     
     // Match v2's output rate: periods * intervals_per_period * a2s_points_per_interval
@@ -1675,6 +1753,8 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
     outputs.states.assign(static_cast<std::size_t>(num_samples) * params.num_states, 0.0);
     outputs.time_points.assign(num_samples, 0.0);
     outputs.switching_states.assign(static_cast<std::size_t>(num_samples) * 3, 0);
+    const int average_model_state_count = (params.model_stage == 1) ? 6 : 8;
+    outputs.average_model_dq_states.assign(average_model_state_count, 0.0);
     
     // Create schedules for all periods
     std::vector<Stage1ScheduleGpu> schedules_stage1;
@@ -1750,18 +1830,37 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
     double* d_output_states = nullptr;
     double* d_time_points = nullptr;
     int* d_switching_states = nullptr;
+    double* d_average_model = nullptr;
     void* d_schedules = nullptr;
     
     const std::size_t states_bytes = outputs.states.size() * sizeof(double);
     const std::size_t time_bytes = outputs.time_points.size() * sizeof(double);
     const std::size_t switching_bytes = outputs.switching_states.size() * sizeof(int);
+    const std::size_t average_model_value_count =
+        static_cast<std::size_t>(AVERAGE_MODEL_STATE_OFFSET + average_model_state_count);
+    const std::size_t average_model_bytes = average_model_value_count * sizeof(double);
     
     // Start timing GPU operations (includes memory transfers and kernel execution)
     const auto clock_start = std::chrono::steady_clock::now();
-    
-    CUDA_CHECK(cudaMalloc(&d_output_states, states_bytes));
-    CUDA_CHECK(cudaMalloc(&d_time_points, time_bytes));
-    CUDA_CHECK(cudaMalloc(&d_switching_states, switching_bytes));
+
+    const auto cleanup_device_memory = [&]() noexcept {
+        cudaFree(d_output_states);
+        cudaFree(d_time_points);
+        cudaFree(d_switching_states);
+        cudaFree(d_average_model);
+        cudaFree(d_schedules);
+        d_output_states = nullptr;
+        d_time_points = nullptr;
+        d_switching_states = nullptr;
+        d_average_model = nullptr;
+        d_schedules = nullptr;
+    };
+
+    try {
+        CUDA_CHECK(cudaMalloc(&d_output_states, states_bytes));
+        CUDA_CHECK(cudaMalloc(&d_time_points, time_bytes));
+        CUDA_CHECK(cudaMalloc(&d_switching_states, switching_bytes));
+        CUDA_CHECK(cudaMalloc(&d_average_model, average_model_bytes));
     
     if (params.model_stage == 1) {
         const std::size_t schedules_bytes = schedules_stage1.size() * sizeof(Stage1ScheduleGpu);
@@ -1785,7 +1884,8 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
             dt,
             d_output_states,
             d_time_points,
-            d_switching_states);
+            d_switching_states,
+            d_average_model);
     } else if (params.topology_level == 2 && params.model_stage == 2) {
         unified_kernel_two_level_stage2<<<blocks, threads_per_block>>>(
             params,
@@ -1794,7 +1894,8 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
             dt,
             d_output_states,
             d_time_points,
-            d_switching_states);
+            d_switching_states,
+            d_average_model);
     } else if (params.topology_level == 3 && params.model_stage == 1) {
         unified_kernel_three_level_stage1<<<blocks, threads_per_block>>>(
             params,
@@ -1803,7 +1904,8 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
             dt,
             d_output_states,
             d_time_points,
-            d_switching_states);
+            d_switching_states,
+            d_average_model);
     } else if (params.topology_level == 3 && params.model_stage == 2) {
         unified_kernel_three_level_stage2<<<blocks, threads_per_block>>>(
             params,
@@ -1812,7 +1914,8 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
             dt,
             d_output_states,
             d_time_points,
-            d_switching_states);
+            d_switching_states,
+            d_average_model);
     } else {
         throw std::runtime_error("Unsupported topology/stage combination");
     }
@@ -1824,6 +1927,23 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
     CUDA_CHECK(cudaMemcpy(outputs.states.data(), d_output_states, states_bytes, cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(outputs.time_points.data(), d_time_points, time_bytes, cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(outputs.switching_states.data(), d_switching_states, switching_bytes, cudaMemcpyDeviceToHost));
+    std::vector<double> average_model_values(average_model_value_count);
+    CUDA_CHECK(cudaMemcpy(average_model_values.data(), d_average_model, average_model_bytes,
+                          cudaMemcpyDeviceToHost));
+    const bool average_model_values_finite = std::all_of(
+        average_model_values.begin() + AVERAGE_MODEL_DUTY_D_OFFSET,
+        average_model_values.end(),
+        [](double value) { return std::isfinite(value); });
+    if (average_model_values[AVERAGE_MODEL_VALID_OFFSET] != 1.0 ||
+        !average_model_values_finite) {
+        throw std::runtime_error(
+            "Average-model steady-state solve failed or produced non-finite values");
+    }
+    outputs.duty_d = average_model_values[AVERAGE_MODEL_DUTY_D_OFFSET];
+    outputs.duty_q = average_model_values[AVERAGE_MODEL_DUTY_Q_OFFSET];
+    std::copy(average_model_values.begin() + AVERAGE_MODEL_STATE_OFFSET,
+              average_model_values.end(),
+              outputs.average_model_dq_states.begin());
     
     // Apply calibration (like v2 does) - adjust period-averaged values to match average model
     if (params.avg_points_per_period > 0) {
@@ -1834,16 +1954,19 @@ UnifiedOutputs run_unified_gpu(const SimulationParameters& params, ComputePrecis
     if (precision == ComputePrecision::Float) {
         quantize_to_float_precision(outputs.states);
         quantize_to_float_precision(outputs.time_points);
+        outputs.duty_d = static_cast<double>(static_cast<float>(outputs.duty_d));
+        outputs.duty_q = static_cast<double>(static_cast<float>(outputs.duty_q));
+        quantize_to_float_precision(outputs.average_model_dq_states);
     }
     
-    const auto clock_end = std::chrono::steady_clock::now();
-    outputs.elapsed_s = std::chrono::duration<double>(clock_end - clock_start).count();
-    
-    // Cleanup
-    cudaFree(d_output_states);
-    cudaFree(d_time_points);
-    cudaFree(d_switching_states);
-    cudaFree(d_schedules);
+        const auto clock_end = std::chrono::steady_clock::now();
+        outputs.elapsed_s = std::chrono::duration<double>(clock_end - clock_start).count();
+    } catch (...) {
+        cleanup_device_memory();
+        throw;
+    }
+
+    cleanup_device_memory();
     
     return outputs;
 }

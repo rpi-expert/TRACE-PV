@@ -137,6 +137,7 @@ For the React mission-profile downloader, set `REACT_APP_NSRDB_API_KEY` before s
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--rounds` | `-r` | `1` | Number of rounds to process per mission-profile iteration |
+| `--max-iterations` | | `0` | Maximum mission-profile repeats; `0` runs until degradation reaches 1.0 |
 | `--modulation` | `-m` | `svm` | Modulation strategy: `svm` or `spwm` |
 | `--ngpus` | `-g` | all available | Number of GPUs to use, or `all` |
 | `--model` | `-M` | `simulator_inputs/simulation_model/example_simulation_model.json` | Simulation model JSON with component part numbers |
@@ -149,7 +150,9 @@ For the React mission-profile downloader, set `REACT_APP_NSRDB_API_KEY` before s
 | `--static-voltage` | | `500` | Static AC voltage RMS line-to-line in volts |
 | `--static-power` | | `300` | Static AC power in watts for the thermal model |
 | `--static-irradiance` | | `1000` | Static solar irradiance in W/m² |
-| `--static-cases` | | `1` | Number of repeated static cases |
+| `--static-cases` | | `105120` | Number of repeated 5-minute static cases (one year) |
+| `--validation-output-dir` | | disabled | Export a model-validation intermediate summary and selected A2S matrices |
+| `--validation-waveform-cases` | | `0` | `none`, `all`, or comma-separated zero-based case indices |
 
 #### Input modes
 
@@ -167,7 +170,7 @@ You can also pass one combined CSV with:
 Combined mission CSV columns:
 
 ```text
-time,ambient_temperature,rh,GHI,ac_voltage[,ac_power]
+time,ambient_temperature,rh,GHI,ac_voltage[,ac_power[,internal_temperature]]
 ```
 
 Static mode creates repeated cases using one set of values. Defaults match the requested stress case: `temp=95`, `rh=95`, `voltage=500`, `power=300`.
@@ -199,7 +202,27 @@ The simulation model JSON specifies component part numbers (capacitor, power mod
 
 # Multiple rounds per iteration
 ./bin/trace_pv --topology 3l1s --rounds 6 --ngpus all
+
+# One-case model-validation run with an A2S core matrix
+./bin/trace_pv --topology 3l2s --input-mode static \
+  --static-cases 1 --max-iterations 1 \
+  --validation-output-dir results/model_validation \
+  --validation-waveform-cases 0
 ```
+
+#### Model-validation intermediate values
+
+When `--validation-output-dir` is supplied, the simulator writes one scalar
+summary per round and a three-column A2S matrix for each selected case. The
+summary exposes the Average Model steady-state dq values, processed capacitor
+RMS current, capacitor and inverter losses, surface/hotspot/junction
+temperatures, and ambient/internal temperature and RH. Predicted internal
+conditions are kept separate from the values actually used downstream when a
+mission profile supplies an internal-temperature override.
+
+See [Model-validation intermediate export](docs/MODEL_VALIDATION.md) for the
+file layout, exact columns, and value semantics. Avoid the `all` waveform
+selector on long mission profiles unless the large output volume is intended.
 
 #### Batch runner
 

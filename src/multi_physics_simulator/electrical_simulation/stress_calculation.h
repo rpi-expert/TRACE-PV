@@ -4,12 +4,14 @@
 #include "simulation_params.h"
 #include <vector>
 
+inline constexpr double kDcLinkCapacitorParallelDeviceCount = 5.0;
+
 // Stress calculation results for a single case
 struct StressResults {
     std::vector<double> V_ce;  // Voltage stress on Phase A Top IGBT (V)
     std::vector<double> I_c;   // Current stress on Phase A Top IGBT (A)
-    std::vector<double> I_cap; // DC Link capacitor ripple current (A)
-    double I_cap_rms;          // RMS value of capacitor current (A)
+    std::vector<double> I_cap; // Total DC-link capacitor-bank ripple current (A)
+    double I_cap_rms;          // Per-device RMS current for the parallel capacitor bank (A)
 };
 
 // AC power calculation results

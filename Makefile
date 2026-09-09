@@ -14,6 +14,7 @@ CPP_SRCS  := $(SRC_DIR)/main.cpp \
              $(SRC_DIR)/simulation_params.cpp \
              $(SRC_DIR)/simulation_case.cpp \
              $(SRC_DIR)/simulation_model.cpp \
+             $(SRC_DIR)/model_validation/intermediate_value_exporter.cpp \
              $(SRC_DIR)/multi_physics_simulator/electrical_simulation/modulation.cpp \
              $(SRC_DIR)/multi_physics_simulator/electrical_simulation/gpu_capacity.cpp \
              $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.cpp \
@@ -42,6 +43,7 @@ OBJS      := $(BIN_DIR)/main.o \
              $(BIN_DIR)/simulation_params.o \
              $(BIN_DIR)/simulation_case.o \
              $(BIN_DIR)/simulation_model.o \
+             $(BIN_DIR)/intermediate_value_exporter.o \
              $(BIN_DIR)/modulation.o \
              $(BIN_DIR)/gpu_capacity.o \
              $(BIN_DIR)/internal_conditions.o \
@@ -88,7 +90,12 @@ $(TARGET_PATH): $(OBJS)
 	$(NVCC) $(NVCC_FLAGS) $(OBJS) $(BIN_DIR)/device_link.o -o $@ $(SQLITE3_LIBS)
 
 # Compile main.cpp
-$(BIN_DIR)/main.o: $(SRC_DIR)/main.cpp
+$(BIN_DIR)/main.o: $(SRC_DIR)/main.cpp \
+                   $(SRC_DIR)/model_validation/intermediate_value_exporter.h \
+                   $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.h \
+                   $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.h \
+                   $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.h \
+                   $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
@@ -107,6 +114,11 @@ $(BIN_DIR)/simulation_model.o: $(SRC_DIR)/simulation_model.cpp
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
+# Compile model-validation CSV exporter
+$(BIN_DIR)/intermediate_value_exporter.o: $(SRC_DIR)/model_validation/intermediate_value_exporter.cpp $(SRC_DIR)/model_validation/intermediate_value_exporter.h
+	@mkdir -p $(BIN_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+
 # Compile modulation.cpp
 $(BIN_DIR)/modulation.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/modulation.cpp
 	@mkdir -p $(BIN_DIR)
@@ -118,12 +130,12 @@ $(BIN_DIR)/gpu_capacity.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulat
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 # Compile internal_conditions.cpp
-$(BIN_DIR)/internal_conditions.o: $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.cpp
+$(BIN_DIR)/internal_conditions.o: $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.cpp $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 # Compile IGBT reference loss/thermal model
-$(BIN_DIR)/capacitor_loss_thermal_model.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.cpp
+$(BIN_DIR)/capacitor_loss_thermal_model.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.cpp $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.h $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
@@ -142,16 +154,16 @@ $(BIN_DIR)/mission_profile_loader.o: $(SRC_DIR)/simulation_preparation/mission_p
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 # Compile a2s_gpu.cu (with device code flag for separate compilation)
-$(BIN_DIR)/a2s_gpu.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.cu
+$(BIN_DIR)/a2s_gpu.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.cu $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_DC_FLAGS) -c $< -o $@
 
 # Compile stress_calculation.cu (with device code flag for separate compilation)
-$(BIN_DIR)/stress_calculation.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.cu
+$(BIN_DIR)/stress_calculation.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.cu $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.h $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_DC_FLAGS) -c $< -o $@
 
-$(BIN_DIR)/capacitor_reference_gpu.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.cu
+$(BIN_DIR)/capacitor_reference_gpu.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.cu $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_DC_FLAGS) -c $< -o $@
 

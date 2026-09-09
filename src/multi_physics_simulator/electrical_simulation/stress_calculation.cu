@@ -124,7 +124,7 @@ StressResults calculate_stress(const UnifiedOutputs& outputs,
         
         // I_cap = I_source - I_draw
         for (int i = 0; i < num_samples; ++i) {
-            results.I_cap[i] = I_source_est - results.I_cap[i] / 5;
+            results.I_cap[i] = I_source_est - results.I_cap[i];
         }
     }
     
@@ -133,7 +133,11 @@ StressResults calculate_stress(const UnifiedOutputs& outputs,
     for (int i = 0; i < num_samples; ++i) {
         sum_squares += results.I_cap[i] * results.I_cap[i];
     }
-    results.I_cap_rms = std::sqrt(sum_squares / num_samples) / 5;
+    // The waveform is total DC-link bank current; divide only the final RMS
+    // to obtain the per-capacitor stress for the parallel devices.
+    results.I_cap_rms =
+        std::sqrt(sum_squares / num_samples) /
+        kDcLinkCapacitorParallelDeviceCount;
     
     // Cleanup
     cudaFree(d_states);

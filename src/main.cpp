@@ -14,6 +14,7 @@
 #include "simulation_model.h"
 #include "simulation_preparation/pv_voltage_iv_curve.h"
 #include "simulation_preparation/mission_profile_loader.h"
+#include "model_validation/intermediate_value_exporter.h"
 #include "reliability_assessment/reliability_models.h"
 #include "reliability_assessment/rainflow_counting.h"
 #include "reliability_assessment/fan_cooling_reliability.h"
@@ -24,6 +25,7 @@
 #include "reliability_assessment/reliability_kernels.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
 
 #include <chrono>
@@ -230,6 +232,9 @@ struct CliOptions {
     ComputePrecision precision = ComputePrecision::Double;
     bool pipeline_enabled = true;
     int batch_size_limit = 0;  // 0 means use calculated GPU capacity
+    std::string validation_output_dir;
+    std::string validation_waveform_cases = "0";
+    bool validation_waveform_cases_set = false;
     ModulationType modulation = ModulationType::SVM;
     int num_gpus = -1;  // -1 means use all available GPUs
 };
@@ -285,6 +290,8 @@ void print_usage(const char* program) {
     std::cout << "  --precision: double or float for electrical waveform output precision (default: double)" << std::endl;
     std::cout << "  --pipeline: on/off, overlap next electrical GPU batch with current CPU post-processing (default: on)" << std::endl;
     std::cout << "  --batch-size-limit: Optional maximum cases per electrical batch (default: 0 = auto)" << std::endl;
+    std::cout << "  --validation-output-dir: Enable model-validation intermediate CSV export to this directory" << std::endl;
+    std::cout << "  --validation-waveform-cases: A2S waveform cases: none, all, or comma-separated zero-based indices (default: 0)" << std::endl;
     std::cout << "  --modulation: Modulation type svm or spwm (default: svm)" << std::endl;
     std::cout << "  --ngpus: Number of GPUs to use, or 'all' to use all available (default: use all available)" << std::endl;
     std::cout << "  --model: Simulation model JSON file with component part numbers (default: simulator_inputs/simulation_model/example_simulation_model.json)" << std::endl;
@@ -330,6 +337,14 @@ CliOptions parse_arguments(int argc, char** argv) {
             if (opts.batch_size_limit < 0) {
                 throw std::invalid_argument("--batch-size-limit must be greater than or equal to 0");
             }
+        } else if (arg == "--validation-output-dir" && (i + 1) < argc) {
+            opts.validation_output_dir = argv[++i];
+            if (opts.validation_output_dir.empty()) {
+                throw std::invalid_argument("--validation-output-dir must not be empty");
+            }
+        } else if (arg == "--validation-waveform-cases" && (i + 1) < argc) {
+            opts.validation_waveform_cases = argv[++i];
+            opts.validation_waveform_cases_set = true;
         } else if ((arg == "--modulation" || arg == "-m") && (i + 1) < argc) {
             opts.modulation = parse_modulation(argv[++i]);
         } else if ((arg == "--ngpus" || arg == "-g") && (i + 1) < argc) {
@@ -400,6 +415,10 @@ CliOptions parse_arguments(int argc, char** argv) {
         opts.topology != "3l2s" && opts.topology != "3l1s") {
         throw std::invalid_argument("--topology must be one of: 2l2s, 2l1s, 3l2s, 3l1s");
     }
+    if (opts.validation_waveform_cases_set && opts.validation_output_dir.empty()) {
+        throw std::invalid_argument(
+            "--validation-waveform-cases requires --validation-output-dir");
+    }
 
     return opts;
 }
@@ -454,7 +473,7 @@ int main(int argc, char** argv) {
             std::cout << "  PCB: " << sim_model.pcb_part_number << std::endl;
             std::cout << "  PV Panel: " << sim_model.pv_panel_part_number << std::endl;
         }
-        
+
         // ====================================================================
         // Section 2: Initialize Component Database and Load Parameters
         // ====================================================================
@@ -855,6 +874,29 @@ int main(int argc, char** argv) {
         std::vector<double> validation_ac_power(total_cases, 0.0);
         std::vector<double> validation_igbt_junction(total_cases, 0.0);
         std::vector<int> validation_reference_model_used(total_cases, 0);
+        std::vector<unsigned char> validation_case_processed(total_cases, 0);
+
+        const bool model_validation_enabled = !options.validation_output_dir.empty();
+        const std::filesystem::path model_validation_dir = options.validation_output_dir;
+        std::optional<WaveformCaseSelector> validation_waveform_selector;
+        std::vector<ModelValidationRecord> model_validation_records;
+        std::vector<unsigned char> validation_waveform_written;
+        if (model_validation_enabled) {
+            validation_waveform_selector.emplace(WaveformCaseSelector::parse(
+                options.validation_waveform_cases,
+                static_cast<std::size_t>(total_cases)));
+            model_validation_records.resize(static_cast<std::size_t>(total_cases));
+            validation_waveform_written.assign(static_cast<std::size_t>(total_cases), 0);
+            for (int case_idx = 0; case_idx < total_cases; ++case_idx) {
+                model_validation_records[static_cast<std::size_t>(case_idx)].case_index =
+                    static_cast<std::size_t>(case_idx);
+            }
+            std::filesystem::create_directories(model_validation_dir / "a2s_core");
+            std::cout << "Model-validation intermediate export enabled: "
+                      << model_validation_dir << std::endl;
+            std::cout << "  A2S waveform cases: "
+                      << options.validation_waveform_cases << std::endl;
+        }
         if (options.num_rounds > total_cases) {
             throw std::runtime_error("Number of rounds cannot exceed the number of simulation cases.");
         }
@@ -954,24 +996,93 @@ int main(int argc, char** argv) {
 
         std::vector<double> all_internal_temps;
         std::vector<double> all_internal_rhs;
+        const bool has_provided_internal_temperature = std::any_of(
+            all_cases.begin(),
+            all_cases.end(),
+            [](const SimulationCase& simulation_case) {
+                return simulation_case.has_internal_temperature &&
+                       std::isfinite(simulation_case.internal_temperature);
+            });
+        std::vector<double> all_internal_dew_points;
         calculate_internal_conditions_ddm(
             all_ambient_temps,
             all_ambient_rhs,
             all_environmental_loads,
             rated_environmental_load,
             all_internal_temps,
-            all_internal_rhs
+            all_internal_rhs,
+            has_provided_internal_temperature ? &all_internal_dew_points : nullptr
         );
         if (all_internal_temps.size() != all_cases.size() ||
-            all_internal_rhs.size() != all_cases.size()) {
+            all_internal_rhs.size() != all_cases.size() ||
+            (has_provided_internal_temperature &&
+             all_internal_dew_points.size() != all_cases.size())) {
             throw std::runtime_error("DDM environmental model failed to generate internal conditions.");
+        }
+        // Keep the model prediction separate from the boundary actually used by
+        // downstream thermal/reliability models. A combined mission CSV may
+        // provide measured internal temperature, which overrides only the used
+        // boundary and must not erase the prediction needed for validation.
+        std::vector<double> predicted_internal_temps;
+        std::vector<double> predicted_internal_rhs;
+        std::vector<std::string> internal_temperature_sources;
+        std::vector<std::string> internal_relative_humidity_sources;
+        if (model_validation_enabled) {
+            predicted_internal_temps = all_internal_temps;
+            predicted_internal_rhs = all_internal_rhs;
+            internal_temperature_sources.assign(all_cases.size(), "predicted");
+            internal_relative_humidity_sources.assign(all_cases.size(), "predicted");
         }
         std::size_t provided_internal_temperature_cases = 0;
         for (std::size_t i = 0; i < all_cases.size(); ++i) {
             if (all_cases[i].has_internal_temperature &&
                 std::isfinite(all_cases[i].internal_temperature)) {
                 all_internal_temps[i] = all_cases[i].internal_temperature;
+                all_internal_rhs[i] =
+                    calculate_relative_humidity_from_temperature_dew_point(
+                        all_internal_temps[i],
+                        all_internal_dew_points[i]);
+                if (!std::isfinite(all_internal_rhs[i])) {
+                    throw std::runtime_error(
+                        "Cannot recompute internal RH for provided internal temperature at case " +
+                        std::to_string(i));
+                }
+                if (model_validation_enabled) {
+                    internal_temperature_sources[i] = "provided";
+                    internal_relative_humidity_sources[i] =
+                        "recomputed_from_internal_dew_point";
+                }
                 ++provided_internal_temperature_cases;
+            }
+        }
+
+        if (model_validation_enabled) {
+            for (std::size_t i = 0; i < all_cases.size(); ++i) {
+                ModelValidationRecord& record = model_validation_records[i];
+                record.ambient_temperature_c = all_cases[i].ambient_temperature;
+                record.ambient_temperature_available =
+                    std::isfinite(record.ambient_temperature_c);
+                record.ambient_relative_humidity_percent = all_cases[i].rh;
+                record.ambient_relative_humidity_available =
+                    std::isfinite(record.ambient_relative_humidity_percent);
+
+                record.internal_temperature_predicted_c = predicted_internal_temps[i];
+                record.internal_temperature_predicted_available =
+                    std::isfinite(record.internal_temperature_predicted_c);
+                record.internal_temperature_used_c = all_internal_temps[i];
+                record.internal_temperature_used_available =
+                    std::isfinite(record.internal_temperature_used_c);
+                record.internal_temperature_source = internal_temperature_sources[i];
+
+                record.internal_relative_humidity_predicted_percent =
+                    predicted_internal_rhs[i];
+                record.internal_relative_humidity_predicted_available =
+                    std::isfinite(record.internal_relative_humidity_predicted_percent);
+                record.internal_relative_humidity_used_percent = all_internal_rhs[i];
+                record.internal_relative_humidity_used_available =
+                    std::isfinite(record.internal_relative_humidity_used_percent);
+                record.internal_relative_humidity_source =
+                    internal_relative_humidity_sources[i];
             }
         }
 
@@ -1070,6 +1181,9 @@ int main(int argc, char** argv) {
             std::vector<double> I_c;
             std::vector<double> I_cap;
             std::vector<double> time_points;
+            double average_model_duty_d = 0.0;
+            double average_model_duty_q = 0.0;
+            std::vector<double> average_model_dq_states;
             double ac_power;
             std::array<IgbtGpuDeviceInput, 4> igbt_devices;
             double igbt_tavg = 0.0;
@@ -1101,6 +1215,12 @@ int main(int argc, char** argv) {
                 clear_vector_storage(device.rising_v.t);
                 clear_vector_storage(device.rising_v.y);
             }
+            // The flags describe the payload currently present in this object,
+            // not whether it was available before the memory-saving release.
+            // Leaving them true would feed empty device signals to the cached
+            // reference model, which can otherwise look like a valid 0 W loss.
+            stored.has_capacitor_reference_inputs = false;
+            stored.has_igbt_reference_inputs = false;
         };
 
         auto write_stored_reference_cache = [&](StoredElectricalResults& stored,
@@ -1206,6 +1326,7 @@ int main(int argc, char** argv) {
                 std::vector<double>().swap(outputs.states);
                 std::vector<double>().swap(outputs.time_points);
                 std::vector<int>().swap(outputs.switching_states);
+                std::vector<double>().swap(outputs.average_model_dq_states);
             }
             std::vector<UnifiedOutputs>().swap(batch_outputs.outputs);
             std::vector<SimulationParameters>().swap(params_batch);
@@ -1344,7 +1465,8 @@ int main(int argc, char** argv) {
                 SimulationParameters static_params = base_params;
                 update_params_for_case(static_params, sc, iv_data);
                 std::vector<SimulationParameters> static_params_batch{static_params};
-                BatchOutputs one_case_outputs = run_unified_gpu_batch(static_params_batch);
+                BatchOutputs one_case_outputs =
+                    run_unified_gpu_batch(static_params_batch, options.precision);
                 if (!one_case_outputs.outputs.empty()) {
                     const UnifiedOutputs& outputs = one_case_outputs.outputs.front();
                     StressResults stress = calculate_stress(outputs, static_params);
@@ -1359,6 +1481,9 @@ int main(int argc, char** argv) {
                     cached.I_c = stress.I_c;
                     cached.I_cap = stress.I_cap;
                     cached.time_points = outputs.time_points;
+                    cached.average_model_duty_d = outputs.duty_d;
+                    cached.average_model_duty_q = outputs.duty_q;
+                    cached.average_model_dq_states = outputs.average_model_dq_states;
                     cached.ac_power = ac_power;
                     cached.has_capacitor_reference_inputs =
                         !cached.time_points.empty() && !cached.I_cap.empty();
@@ -1428,7 +1553,7 @@ int main(int argc, char** argv) {
             double round_igbt_stressor_deltaT = 0.0;  // IGBT stressor from deltaT model
             double round_igbt_stressor_arrhenius = 0.0;  // IGBT stressor from Arrhenius model
             double round_pcb_degradation = 0.0;
-            bool round_terminated_early = false;  // Flag for early termination (shared across threads)
+            std::atomic<bool> round_terminated_early{false};
             
             std::vector<CaseStressorRecord> round_stressor_records;
             // A round is one sequential batch of the year.  Its electrical and
@@ -1446,6 +1571,16 @@ int main(int argc, char** argv) {
                 round_computation_cache[static_cast<std::size_t>(round)];
             const bool reuse_round_cache =
                 round_cache.valid && round_cache.parameter_state == round_parameter_state;
+
+            if (!reuse_round_cache) {
+                for (int i = round_start_case; i < round_end_case; ++i) {
+                    const std::size_t idx = static_cast<std::size_t>(i);
+                    validation_case_processed[idx] = 0;
+                    if (model_validation_enabled) {
+                        model_validation_records[idx].case_processed = false;
+                    }
+                }
+            }
 
             std::string thermal_action = reuse_round_cache
                 ? "reuse"
@@ -1625,13 +1760,17 @@ int main(int argc, char** argv) {
                             next_batch_future_valid = true;
                         }
 
-                        for (int batch = cpu_thread_id; batch < round_batches && !round_terminated_early; batch += num_gpus) {
+                        for (int batch = cpu_thread_id;
+                             batch < round_batches &&
+                                 !round_terminated_early.load(std::memory_order_relaxed);
+                             batch += num_gpus) {
                             PreparedBatch prepared;
                             if (use_pipeline) {
                                 prepared = next_batch_future.get();
                                 next_batch_future_valid = false;
                                 const int next_batch = batch + num_gpus;
-                                if (next_batch < round_batches && !round_terminated_early) {
+                                if (next_batch < round_batches &&
+                                    !round_terminated_early.load(std::memory_order_relaxed)) {
                                     next_batch_future = launch_batch(next_batch);
                                     next_batch_future_valid = true;
                                 }
@@ -1760,6 +1899,9 @@ int main(int argc, char** argv) {
 	                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
 	                                            stored_electrical_results[actual_case_idx].I_cap = stress.I_cap;
 	                                            stored_electrical_results[actual_case_idx].time_points = outputs.time_points;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_d = outputs.duty_d;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_q = outputs.duty_q;
+	                                            stored_electrical_results[actual_case_idx].average_model_dq_states = outputs.average_model_dq_states;
 	                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
 	                                            stored_electrical_results[actual_case_idx].has_capacitor_reference_inputs =
 	                                                !stored_electrical_results[actual_case_idx].time_points.empty() &&
@@ -1791,6 +1933,9 @@ int main(int argc, char** argv) {
 	                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
 	                                            stored_electrical_results[actual_case_idx].I_cap = stress.I_cap;
 	                                            stored_electrical_results[actual_case_idx].time_points = outputs.time_points;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_d = outputs.duty_d;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_q = outputs.duty_q;
+	                                            stored_electrical_results[actual_case_idx].average_model_dq_states = outputs.average_model_dq_states;
 	                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
 	                                            stored_electrical_results[actual_case_idx].has_capacitor_reference_inputs =
 	                                                !stored_electrical_results[actual_case_idx].time_points.empty() &&
@@ -1817,6 +1962,79 @@ int main(int argc, char** argv) {
 	                                            release_stored_reference_payload(
 	                                                stored_electrical_results[actual_case_idx]);
 	                                        }
+                                    }
+                                }
+
+                                if (model_validation_enabled) {
+                                    ModelValidationRecord& record =
+                                        model_validation_records[static_cast<std::size_t>(actual_case_idx)];
+                                    record.capacitor_rms_current_a = stress.I_cap_rms;
+
+                                    const UnifiedOutputs* a2s_source = nullptr;
+                                    const StoredElectricalResults* stored_source = nullptr;
+                                    if (static_electrical_result.has_value()) {
+                                        stored_source = &*static_electrical_result;
+                                    } else if (skip_electrical_simulation) {
+                                        const int stored_case_idx =
+                                            static_electrical_profile ? 0 : actual_case_idx;
+                                        if (stored_case_idx >= 0 &&
+                                            stored_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                            stored_source = &stored_electrical_results[
+                                                static_cast<std::size_t>(stored_case_idx)];
+                                        }
+                                    } else {
+                                        a2s_source = &batch_outputs.outputs[case_idx];
+                                    }
+
+                                    const std::vector<double>* dq_states = nullptr;
+                                    const std::vector<double>* waveform_time = nullptr;
+                                    if (a2s_source != nullptr) {
+                                        record.average_model_duty_d = a2s_source->duty_d;
+                                        record.average_model_duty_q = a2s_source->duty_q;
+                                        dq_states = &a2s_source->average_model_dq_states;
+                                        waveform_time = &a2s_source->time_points;
+                                    } else if (stored_source != nullptr) {
+                                        record.average_model_duty_d = stored_source->average_model_duty_d;
+                                        record.average_model_duty_q = stored_source->average_model_duty_q;
+                                        dq_states = &stored_source->average_model_dq_states;
+                                        waveform_time = &stored_source->time_points;
+                                    }
+
+                                    if (dq_states != nullptr) {
+                                        record.x_dq_ss.fill(ModelValidationRecord::missing_numeric_value());
+                                        record.dq_count = std::min(record.x_dq_ss.size(), dq_states->size());
+                                        std::copy_n(dq_states->begin(), record.dq_count,
+                                                    record.x_dq_ss.begin());
+                                    }
+
+                                    const std::size_t validation_case_idx =
+                                        static_cast<std::size_t>(actual_case_idx);
+                                    if (mission_profile_iteration == 1 &&
+                                        validation_waveform_selector->contains(validation_case_idx) &&
+                                        validation_waveform_written[validation_case_idx] == 0) {
+                                        try {
+                                            if (waveform_time == nullptr || waveform_time->empty()) {
+                                                throw std::runtime_error(
+                                                    "A2S time vector is unavailable for the selected case");
+                                            }
+                                            const std::filesystem::path waveform_path =
+                                                model_validation_dir / "a2s_core" /
+                                                ("case_" + std::to_string(actual_case_idx) + ".csv");
+                                            write_a2s_core_matrix_csv(
+                                                waveform_path,
+                                                *waveform_time,
+                                                stress.V_ce,
+                                                stress.I_c);
+                                            validation_waveform_written[validation_case_idx] = 1;
+                                        } catch (const std::exception& validation_error) {
+                                            #pragma omp critical(tracepv_validation_output)
+                                            {
+                                                std::cerr
+                                                    << "Warning: failed to export A2S core matrix for case "
+                                                    << actual_case_idx << ": "
+                                                    << validation_error.what() << std::endl;
+                                            }
+                                        }
                                     }
                                 }
                                 thread_profile.stress_calculation +=
@@ -1852,6 +2070,8 @@ int main(int argc, char** argv) {
                                         capacitor_reference_inputs[case_idx].time_points = &batch_outputs.outputs[case_idx].time_points;
                                         capacitor_reference_inputs[case_idx].capacitor_current = &batch_stresses[case_idx].I_cap;
                                     }
+                                    capacitor_reference_inputs[case_idx].current_scale =
+                                        1.0 / kDcLinkCapacitorParallelDeviceCount;
                                     capacitor_reference_inputs[case_idx].ambient_temperature = batch_internal_temps[case_idx];
                                     capacitor_reference_inputs[case_idx].rth_surface_ambient = rth_surf_value;
                                     capacitor_reference_inputs[case_idx].rth_core_surface = rth_core_surface;
@@ -1936,7 +2156,7 @@ int main(int argc, char** argv) {
                             // Process loss model and thermal model for each case
                             for (size_t case_idx = 0; case_idx < batch_outputs.outputs.size(); ++case_idx) {
                                 const SimulationParameters& params = params_batch[case_idx];
-                                
+
                                 // Get the corresponding simulation case for ambient conditions
                                 int actual_case_idx = batch_start + static_cast<int>(case_idx);
                                 const SimulationCase& sc = all_cases[actual_case_idx];
@@ -2103,6 +2323,36 @@ int main(int argc, char** argv) {
                                     power_module_thermal.junction_temperature;
                                 validation_reference_model_used[actual_case_idx] =
                                     capacitor_reference_thermal.valid ? 1 : 0;
+                                validation_case_processed[actual_case_idx] = 1;
+                                if (model_validation_enabled) {
+                                    ModelValidationRecord& record =
+                                        model_validation_records[static_cast<std::size_t>(actual_case_idx)];
+                                    record.case_processed = true;
+                                    record.capacitor_loss_w = capacitor_loss.capacitor_loss;
+                                    record.capacitor_surface_temperature_c =
+                                        capacitor_thermal.capacitor_surface_temperature;
+                                    record.capacitor_hotspot_temperature_c =
+                                        capacitor_thermal.capacitor_hotspot_temperature;
+                                    record.igbt_junction_temperature_c =
+                                        power_module_thermal.junction_temperature;
+                                    record.capacitor_reference_loss_used =
+                                        capacitor_reference_thermal.valid;
+                                    record.capacitor_reference_temperature_used =
+                                        capacitor_reference_thermal.valid;
+                                    record.capacitor_temperature_adjusted_after_degradation = false;
+                                    record.igbt_reference_loss_used =
+                                        igbt_reference_thermal.valid;
+                                    record.igbt_reference_temperature_used =
+                                        igbt_reference_thermal.valid;
+                                    record.igbt_temperature_adjusted_after_degradation = false;
+                                    record.inverter_average_total_loss_valid =
+                                        power_module_loss.valid &&
+                                        std::isfinite(power_module_loss.power_module_loss);
+                                    record.inverter_average_total_loss_w =
+                                        record.inverter_average_total_loss_valid
+                                            ? power_module_loss.power_module_loss
+                                            : ModelValidationRecord::missing_numeric_value();
+                                }
                                 batch_capacitor_hotspot_temps.push_back(capacitor_thermal.capacitor_hotspot_temperature);
                                 
                                 // Get capacitor voltage based on type
@@ -2840,7 +3090,7 @@ int main(int argc, char** argv) {
                             round_pcb_degradation += pcb_degradation;
                             
                             // Check if any accumulated stressor >= 1.0 (early termination)
-                            if (!round_terminated_early && 
+                            if (!round_terminated_early.load(std::memory_order_relaxed) &&
                                 (round_fan_stressor_electrical_external >= 1.0 ||
                                  round_fan_stressor_electrical_internal >= 1.0 ||
                                  round_fan_stressor_mechanical_external >= 1.0 ||
@@ -2849,7 +3099,7 @@ int main(int argc, char** argv) {
                                  round_igbt_stressor_deltaT >= 1.0 ||
                                  round_igbt_stressor_arrhenius >= 1.0 ||
                                  round_pcb_degradation >= 1.0)) {
-                                round_terminated_early = true;
+                                round_terminated_early.store(true, std::memory_order_relaxed);
                             }
                         }
                         
@@ -2889,7 +3139,7 @@ int main(int argc, char** argv) {
                 round_igbt_stressor_deltaT >= 1.0 ||
                 round_igbt_stressor_arrhenius >= 1.0 ||
                 round_pcb_degradation >= 1.0) {
-                round_terminated_early = true;
+                round_terminated_early.store(true, std::memory_order_relaxed);
                 std::cout << "\nEarly termination: Accumulated stressor >= 1.0 detected in round " 
                           << (round + 1) << std::endl;
             }
@@ -2950,6 +3200,17 @@ int main(int argc, char** argv) {
 
             const DegradationParameterState after_round_parameter_state = current_parameter_state();
             if (parameter_state_exceeds(after_round_parameter_state, round_parameter_state)) {
+                const bool capacitor_thermal_bucket_changed =
+                    after_round_parameter_state[4] > round_parameter_state[4];
+                const int previous_igbt_thermal_bucket =
+                    std::max(round_parameter_state[5], round_parameter_state[6]);
+                const int updated_igbt_thermal_bucket =
+                    std::max(after_round_parameter_state[5], after_round_parameter_state[6]);
+                const bool igbt_thermal_bucket_changed =
+                    updated_igbt_thermal_bucket > previous_igbt_thermal_bucket;
+                const bool thermal_parameter_changed =
+                    capacitor_thermal_bucket_changed || igbt_thermal_bucket_changed;
+
                 std::cout << "TRACEPV_CRITICAL_DEGRADATION iteration="
                           << mission_profile_iteration
                           << " round=" << (round + 1) << "/" << options.num_rounds
@@ -2960,9 +3221,12 @@ int main(int argc, char** argv) {
                           << ": "
                           << describe_bucket_crossing(round_parameter_state, after_round_parameter_state)
                           << ". Keeping the completed electrical and reliability results; "
-                             "rerunning thermal only with the updated parameters."
+                          << (thermal_parameter_changed
+                                  ? "updating only the affected thermal outputs."
+                                  : "no capacitor or IGBT thermal parameter changed.")
                           << std::endl;
 
+                if (thermal_parameter_changed) {
                 thermal_action = "rerun";
                 std::cout << "TRACEPV_THERMAL action=rerun"
                           << " iteration=" << mission_profile_iteration
@@ -2976,8 +3240,7 @@ int main(int argc, char** argv) {
                     1.0 + static_cast<double>(after_round_parameter_state[4]) *
                               kCriticalDegradationStep;
                 const double updated_igbt_thermal_resistance_scale =
-                    1.0 + static_cast<double>(std::max(after_round_parameter_state[5],
-                                                       after_round_parameter_state[6])) *
+                    1.0 + static_cast<double>(updated_igbt_thermal_bucket) *
                               kCriticalDegradationStep;
 
                 CapacitorCoefficients updated_cap_coeffs;
@@ -3003,20 +3266,43 @@ int main(int argc, char** argv) {
                 const int round_start_case = case_index - round_cases;
                 for (int i = round_start_case; i < case_index; ++i) {
                     const std::size_t idx = static_cast<std::size_t>(i);
-                    const CapacitorThermalResult updated_capacitor_thermal =
-                        calculate_capacitor_thermal(
-                            validation_capacitor_loss[idx],
-                            validation_internal_temperature[idx],
-                            updated_rth_amb,
-                            updated_rth_surf);
-                    validation_capacitor_hotspot[idx] =
-                        updated_capacitor_thermal.capacitor_hotspot_temperature;
-                    validation_capacitor_surface[idx] =
-                        updated_capacitor_thermal.capacitor_surface_temperature;
+                    if (validation_case_processed[idx] == 0) {
+                        continue;
+                    }
+                    if (capacitor_thermal_bucket_changed) {
+                        const CapacitorThermalResult updated_capacitor_thermal =
+                            calculate_capacitor_thermal(
+                                validation_capacitor_loss[idx],
+                                validation_internal_temperature[idx],
+                                updated_rth_amb,
+                                updated_rth_surf);
+                        validation_capacitor_hotspot[idx] =
+                            updated_capacitor_thermal.capacitor_hotspot_temperature;
+                        validation_capacitor_surface[idx] =
+                            updated_capacitor_thermal.capacitor_surface_temperature;
+                        validation_reference_model_used[idx] = 0;
+                        if (model_validation_enabled) {
+                            model_validation_records[idx].capacitor_surface_temperature_c =
+                                validation_capacitor_surface[idx];
+                            model_validation_records[idx].capacitor_hotspot_temperature_c =
+                                validation_capacitor_hotspot[idx];
+                            model_validation_records[idx].capacitor_reference_temperature_used = false;
+                            model_validation_records[idx].capacitor_temperature_adjusted_after_degradation = true;
+                        }
+                    }
 
-                    const double ambient = all_cases[idx].ambient_temperature;
-                    validation_igbt_junction[idx] =
-                        ambient + (validation_igbt_junction[idx] - ambient) * igbt_scale_ratio;
+                    if (igbt_thermal_bucket_changed) {
+                        const double ambient = all_cases[idx].ambient_temperature;
+                        validation_igbt_junction[idx] =
+                            ambient +
+                            (validation_igbt_junction[idx] - ambient) * igbt_scale_ratio;
+                        if (model_validation_enabled) {
+                            model_validation_records[idx].igbt_junction_temperature_c =
+                                validation_igbt_junction[idx];
+                            model_validation_records[idx].igbt_reference_temperature_used = false;
+                            model_validation_records[idx].igbt_temperature_adjusted_after_degradation = true;
+                        }
+                    }
                 }
 
                 std::cout << "TRACEPV_THERMAL_COMPLETE"
@@ -3027,6 +3313,7 @@ int main(int argc, char** argv) {
                           << " igbt_rth_scale=" << updated_igbt_thermal_resistance_scale
                           << " electrical_reused=true reliability_results_preserved=true"
                           << std::endl;
+                }
             }
 
             // Write the accepted thermal state after any thermal-only rerun so
@@ -3045,6 +3332,9 @@ int main(int argc, char** argv) {
                 const int round_start_case = case_index - round_cases;
                 for (int i = round_start_case; i < case_index; ++i) {
                     const std::size_t idx = static_cast<std::size_t>(i);
+                    if (validation_case_processed[idx] == 0) {
+                        continue;
+                    }
                     thermal_csv << i << "," << all_cases[idx].time << ","
                                 << all_cases[idx].ambient_temperature << ","
                                 << validation_internal_temperature[idx] << ","
@@ -3061,10 +3351,30 @@ int main(int argc, char** argv) {
                 std::cerr << "  Warning: Failed to write thermal CSV: "
                           << thermal_csv_filename << std::endl;
             }
+
+            if (model_validation_enabled) {
+                const std::filesystem::path validation_summary_path =
+                    model_validation_dir /
+                    ("iteration_" + std::to_string(mission_profile_iteration)) /
+                    ("intermediate_summary_round_" +
+                     std::to_string(current_round + 1) + ".csv");
+                const std::size_t summary_begin = static_cast<std::size_t>(
+                    case_index - round_cases);
+                const std::size_t summary_end = static_cast<std::size_t>(case_index);
+                write_model_validation_summary_csv(
+                    validation_summary_path,
+                    all_cases,
+                    model_validation_records,
+                    summary_begin,
+                    summary_end);
+                std::cout << "  Model-validation intermediate summary saved to: "
+                          << validation_summary_path << std::endl;
+            }
             
             // Early termination: break out of round loop if any cumulative iteration stressor >= 1.0
             // Check both round-level (for immediate termination) and iteration-level (cumulative across rounds)
-            bool should_terminate = round_terminated_early;
+            bool should_terminate =
+                round_terminated_early.load(std::memory_order_relaxed);
             if (!should_terminate) {
                 // Check cumulative iteration stressors (including all previous rounds in this iteration)
                 if (iteration_fan_stressor_electrical_external >= 1.0 ||
@@ -3311,6 +3621,34 @@ int main(int argc, char** argv) {
                 std::cout << "\n" << std::string(60, '=') << std::endl;
                 std::cout << "FAILURE DETECTED: " << failed_component << " reached degradation = 1.0" << std::endl;
                 std::cout << std::string(60, '=') << std::endl;
+            }
+        }
+
+        if (model_validation_enabled) {
+            std::vector<std::size_t> missing_waveform_cases;
+            for (std::size_t case_idx = 0;
+                 case_idx < validation_waveform_written.size();
+                 ++case_idx) {
+                if (validation_waveform_selector->contains(case_idx) &&
+                    validation_waveform_written[case_idx] == 0) {
+                    missing_waveform_cases.push_back(case_idx);
+                }
+            }
+            if (!missing_waveform_cases.empty()) {
+                std::cerr << "Warning: " << missing_waveform_cases.size()
+                          << " selected A2S matrix/matrices were not written, usually "
+                             "because early termination occurred before those cases. "
+                             "Missing case indices:";
+                constexpr std::size_t kReportedMissingWaveformLimit = 10;
+                const std::size_t report_count = std::min(
+                    missing_waveform_cases.size(), kReportedMissingWaveformLimit);
+                for (std::size_t i = 0; i < report_count; ++i) {
+                    std::cerr << (i == 0 ? " " : ",") << missing_waveform_cases[i];
+                }
+                if (report_count < missing_waveform_cases.size()) {
+                    std::cerr << ",...";
+                }
+                std::cerr << std::endl;
             }
         }
         

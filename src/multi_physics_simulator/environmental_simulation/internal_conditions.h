@@ -4,6 +4,16 @@
 #include <vector>
 
 /**
+ * Recompute relative humidity at a temperature while preserving the supplied
+ * dew point (the model's moisture state / water-vapour partial pressure).
+ * Returns NaN for non-finite inputs or temperatures outside the Magnus
+ * formula's valid denominator domain.
+ */
+double calculate_relative_humidity_from_temperature_dew_point(
+    double temperature_c,
+    double dew_point_c);
+
+/**
  * Calculate internal temperature and relative humidity conditions using the
  * environmental model from ddm/data_driven_model_without_trainning.ipynb.
  *
@@ -27,6 +37,8 @@
  *                         If <= 0, the max positive load value is used.
  * @param internal_temps Output: Predicted internal temperatures in Celsius
  * @param internal_rhs Output: Predicted internal relative humidity in %
+ * @param internal_dew_points Optional output: rolling internal dew point in
+ *                            Celsius, before RH saturation clamping
  */
 void calculate_internal_conditions_ddm(
     const std::vector<double>& ambient_temps,
@@ -34,7 +46,8 @@ void calculate_internal_conditions_ddm(
     const std::vector<double>& load_values,
     double rated_load_value,
     std::vector<double>& internal_temps,
-    std::vector<double>& internal_rhs
+    std::vector<double>& internal_rhs,
+    std::vector<double>* internal_dew_points = nullptr
 );
 
 /**
