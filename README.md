@@ -136,7 +136,8 @@ For the React mission-profile downloader, set `REACT_APP_NSRDB_API_KEY` before s
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--rounds` | `-r` | `1` | Number of rounds to process per mission-profile iteration |
+| `--rounds` | `-r` | `1` | Number of partitions (rounds) within each mission-profile iteration |
+| `--max-iterations` | | `0` | Maximum mission-profile repeats; `0` runs until degradation reaches 1.0 |
 | `--modulation` | `-m` | `svm` | Modulation strategy: `svm` or `spwm` |
 | `--ngpus` | `-g` | all available | Number of GPUs to use, or `all` |
 | `--model` | `-M` | `simulator_inputs/simulation_model/example_simulation_model.json` | Simulation model JSON with component part numbers |
@@ -149,7 +150,86 @@ For the React mission-profile downloader, set `REACT_APP_NSRDB_API_KEY` before s
 | `--static-voltage` | | `500` | Static AC voltage RMS line-to-line in volts |
 | `--static-power` | | `300` | Static AC power in watts for the thermal model |
 | `--static-irradiance` | | `1000` | Static solar irradiance in W/m² |
-| `--static-cases` | | `1` | Number of repeated static cases |
+| `--static-cases` | | `105120` | Number of repeated 5-minute static cases (one year) |
+| `--validation-output-dir` | | disabled | Export a model-validation intermediate summary and selected A2S matrices |
+| `--validation-waveform-cases` | | `0` | `none`, `all`, or comma-separated zero-based case indices |
+| `--wall-time` | | disabled | Export `wall_time.json` with elapsed wall-clock seconds |
+| `--lifetime` | | disabled | Export `lifetime.csv` and `lifetime.json` with component damage, projected lifetime and failure status |
+| `--output-dir` | | `results/summary` | Destination for selected wall-time/lifetime reports; requires one or both export flags |
+| `--verbose` | | disabled | Restore detailed diagnostic/profiling console output; warnings and progress remain visible by default |
+
+#### Limit the number of iterations
+
+Run from the repository root after rebuilding the binary on a Linux/CUDA host:
+
+```bash
+make -j4
+
+# Run one mission-profile iteration
+./bin/trace_pv --topology 3l2s --max-iterations 1
+
+# One iteration with detailed diagnostics and both optional report exports
+./bin/trace_pv --topology 3l2s --max-iterations 1 \
+  --verbose --wall-time --lifetime --output-dir results/one_iteration
+```
+
+The option is `--max-iterations` (plural), not `--max-iteration`. An iteration is
+one pass through the loaded mission profile, not one case or necessarily one
+year. `--rounds` partitions that pass; it does not set the number of profile
+repeats. `--max-iterations 0` (the default) has no iteration limit and runs until
+degradation reaches 1.0. A positive limit can still stop earlier at that
+degradation threshold.
+
+#### Select wall-time, lifetime and verbose output
+
+Other output combinations:
+
+```bash
+# Wall-time report only (among the new optional reports)
+./bin/trace_pv --topology 3l2s --wall-time
+
+# Component lifetime projections, accumulated damage and detected-failure status
+./bin/trace_pv --topology 3l2s --lifetime
+
+# Detailed console diagnostics
+./bin/trace_pv --topology 3l2s --verbose
+
+# Combine all three and choose the report destination
+./bin/trace_pv --topology 3l2s \
+  --wall-time --lifetime --verbose --output-dir results/my_run
+
+# Small execution/export smoke test, NOT a validated lifetime study
+./bin/trace_pv --topology 3l2s --input-mode static \
+  --static-cases 2 --max-iterations 1 \
+  --wall-time --lifetime --output-dir results/output_smoke
+```
+
+`--wall-time`, `--lifetime` and `--verbose` are presence-only flags: omit a flag
+to disable that optional output; do not pass `on`, `off`, `true` or `false`.
+Existing mission, static, GPU and validation options can be combined with them.
+
+By default the console shows component configuration, progress, final accumulated
+damage and wall time. `--verbose` adds detailed model and profiling diagnostics.
+The WebUI explicitly requests verbose output to preserve its diagnostic cards.
+New report exports are opt-in; `--output-dir` does **not** relocate or suppress
+the existing stressor/thermal CSVs, timing logs or `--validation-output-dir`
+exports. Requested summary files with the same names are overwritten; unselected
+old report files are left untouched, so use a new output directory for each run.
+
+Lifetime is a **constant-average-damage projection**: represented exposure hours
+divided by accumulated dimensionless damage, with 8,760 hours per year. Exposure
+counts accepted five-minute cases, including reused rounds but excluding
+thermal-only refreshes. It does not assume one profile iteration equals a year,
+does not fill missing calendar intervals, and is not a substitute for a completed
+degradation-feedback simulation. Detected failure boundaries and right-censored
+runs are identified separately; zero/invalid damage does not produce a fabricated
+finite lifetime. See [output report definitions](docs/OUTPUT_REPORTS.md).
+
+Portable CLI, logging and report tests (no CUDA required):
+
+```bash
+make test-reporting
+```
 
 #### Input modes
 
@@ -199,7 +279,27 @@ The simulation model JSON specifies component part numbers (capacitor, power mod
 
 # Multiple rounds per iteration
 ./bin/trace_pv --topology 3l1s --rounds 6 --ngpus all
+
+# One-case model-validation run with an A2S core matrix
+./bin/trace_pv --topology 3l2s --input-mode static \
+  --static-cases 1 --max-iterations 1 \
+  --validation-output-dir results/model_validation \
+  --validation-waveform-cases 0
 ```
+
+#### Model-validation intermediate values
+
+When `--validation-output-dir` is supplied, the simulator writes one scalar
+summary per round and a three-column A2S matrix for each selected case. The
+summary exposes the Average Model steady-state dq values, processed capacitor
+RMS current, capacitor and inverter losses, surface/hotspot/junction
+temperatures, and ambient/internal temperature and RH. Predicted internal
+conditions are kept separate from the values actually used downstream when a
+mission profile supplies an internal-temperature override.
+
+See [Model-validation intermediate export](docs/MODEL_VALIDATION.md) for the
+file layout, exact columns, and value semantics. Avoid the `all` waveform
+selector on long mission profiles unless the large output volume is intended.
 
 #### Batch runner
 
@@ -226,6 +326,18 @@ make run TOPOLOGY=3l2s MODE=static
 ```
 
 ---
+
+## Loss / Thermal Source Layout
+
+In `src/multi_physics_simulator/thermal_simulation/`:
+
+- `capacitor_loss_thermal_model.cpp` and `igbt_loss_thermal_model.cpp` implement the detailed models.
+- `capacitor_reference_gpu.cu` and `igbt_reference_gpu.cu` contain their GPU implementations; detailed CPU paths remain available.
+- `simplified_loss_thermal.h` contains only the live host-only approximations used by `fast`, invalid-reference fallback, and capacitor thermal-only refresh. It is **not** the detailed model.
+
+The unused legacy CUDA kernels and V/I-only IGBT loss API have been removed, along with the old `loss_model.cu/.h` and `thermal_model.cu/.h` files and their build entries. This is a dead-code cleanup, not a change to simulation physics: the existing simplified fallback remains reachable, even in `reference` mode when a detailed result is invalid.
+
+Run `make test-loss-thermal-cleanup` for host-only compatibility tests. Rebuild with `make -j4` on the Linux/CUDA host before using the updated simulator; an existing binary is not updated by deleting source files.
 
 ## Development Progress
 

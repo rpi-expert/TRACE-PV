@@ -36,17 +36,6 @@ double dew_point_from_temperature_rh(double temperature_c, double rh_percent) {
     return (kMagnusB * alpha) / (kMagnusA - alpha);
 }
 
-double rh_from_temperature_dew_point(double temperature_c, double dew_point_c) {
-    const double temperature = finite_or(temperature_c, 25.0);
-    const double dew_point = finite_or(dew_point_c, temperature);
-    const double es_t = saturation_vapor_pressure(temperature);
-    const double es_td = saturation_vapor_pressure(dew_point);
-    if (es_t <= 0.0 || !std::isfinite(es_t) || !std::isfinite(es_td)) {
-        return 0.0;
-    }
-    return clamp(100.0 * (es_td / es_t), 0.0, 100.0);
-}
-
 double estimate_inverter_waste_heat(double power_ratio) {
     const double ratio = clamp(finite_or(power_ratio, 0.0), 0.0, 1.5);
     const double efficiency = clamp(0.98 - 0.08 * std::pow(1.0 - ratio, 4.0), 0.85, 0.99);
@@ -69,22 +58,44 @@ double infer_rated_load(const std::vector<double>& load_values, double requested
 
 } // namespace
 
+double calculate_relative_humidity_from_temperature_dew_point(
+    double temperature_c,
+    double dew_point_c) {
+    if (!std::isfinite(temperature_c) || !std::isfinite(dew_point_c) ||
+        temperature_c <= -kMagnusB || dew_point_c <= -kMagnusB) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double es_t = saturation_vapor_pressure(temperature_c);
+    const double es_td = saturation_vapor_pressure(dew_point_c);
+    if (es_t <= 0.0 || !std::isfinite(es_t) || !std::isfinite(es_td)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return clamp(100.0 * (es_td / es_t), 0.0, 100.0);
+}
+
 void calculate_internal_conditions_ddm(
     const std::vector<double>& ambient_temps,
     const std::vector<double>& ambient_rhs,
     const std::vector<double>& load_values,
     double rated_load_value,
     std::vector<double>& internal_temps,
-    std::vector<double>& internal_rhs) {
+    std::vector<double>& internal_rhs,
+    std::vector<double>* internal_dew_points) {
     const std::size_t num_cases = ambient_temps.size();
     if (ambient_rhs.size() != num_cases || load_values.size() != num_cases) {
         internal_temps.clear();
         internal_rhs.clear();
+        if (internal_dew_points != nullptr) {
+            internal_dew_points->clear();
+        }
         return;
     }
 
     internal_temps.resize(num_cases);
     internal_rhs.resize(num_cases);
+    if (internal_dew_points != nullptr) {
+        internal_dew_points->resize(num_cases);
+    }
 
     const double rated_load = infer_rated_load(load_values, rated_load_value);
     const double alpha = 2.0 / (kEwmaSpan + 1.0);
@@ -116,7 +127,12 @@ void calculate_internal_conditions_ddm(
         }
 
         const double internal_dew_point = dew_window_sum / static_cast<double>(dew_window.size());
-        internal_rhs[i] = rh_from_temperature_dew_point(internal_temp, internal_dew_point);
+        internal_rhs[i] = calculate_relative_humidity_from_temperature_dew_point(
+            internal_temp,
+            internal_dew_point);
+        if (internal_dew_points != nullptr) {
+            (*internal_dew_points)[i] = internal_dew_point;
+        }
     }
 }
 

@@ -16,6 +16,12 @@ struct UnifiedOutputs {
     double elapsed_s;  // elapsed time in seconds
     std::vector<double> time_points;
     std::vector<int> switching_states; // Row-major: [sa, sb, sc] for each sample (3 * total_samples)
+    double duty_d = 0.0; // Average-model d-axis duty used by the A2S initial condition
+    double duty_q = 0.0; // Average-model q-axis duty used by the A2S initial condition
+    // Steady-state average-model dq state used to initialise A2S:
+    // stage 1: [I1d, I1q, I2d, I2q, Vcd, Vcq]
+    // stage 2: [I1d, I1q, I2d, I2q, Vcd, Vcq, ILboost, Vdc]
+    std::vector<double> average_model_dq_states;
 };
 
 struct BatchOutputs {

@@ -1,5 +1,6 @@
 #include "igbt_loss_thermal_model.h"
 #include "igbt_reference_gpu.h"
+#include "reporting/console_output.h"
 
 #include <algorithm>
 #include <array>
@@ -472,22 +473,22 @@ std::array<DeviceInput, 4> build_three_level_inputs(const UnifiedOutputs& output
             const auto vdc_stats = stats_for(vdc_samples);
             const auto phase_stats = stats_for(phase_v_samples);
             const auto outer_v_stats = stats_for(outer_v_samples);
-            std::cerr << "DEBUG: IGBT reference input waveform:" << std::endl;
-            std::cerr << "  params: v_pv=" << params.v_pv
+            tracepv::reporting::debug_output() << "DEBUG: IGBT reference input waveform:" << std::endl;
+            tracepv::reporting::debug_output() << "  params: v_pv=" << params.v_pv
                       << " V, vdc_target=" << params.vdc_target
                       << " V, boost_duty=" << params.boost_duty
                       << ", vg_mag=" << params.vg_mag
                       << " V, samples=" << n
                       << ", num_states=" << params.num_states << std::endl;
-            std::cerr << "  ia range/rms: [" << ia_stats.min << ", " << ia_stats.max
+            tracepv::reporting::debug_output() << "  ia range/rms: [" << ia_stats.min << ", " << ia_stats.max
                       << "] A, rms=" << ia_stats.rms << " A" << std::endl;
-            std::cerr << "  vdc range/mean: [" << vdc_stats.min << ", " << vdc_stats.max
+            tracepv::reporting::debug_output() << "  vdc range/mean: [" << vdc_stats.min << ", " << vdc_stats.max
                       << "] V, mean=" << vdc_stats.mean << " V" << std::endl;
-            std::cerr << "  phase_v range: [" << phase_stats.min << ", " << phase_stats.max << "] V" << std::endl;
-            std::cerr << "  outer_v range: [" << outer_v_stats.min << ", " << outer_v_stats.max << "] V" << std::endl;
+            tracepv::reporting::debug_output() << "  phase_v range: [" << phase_stats.min << ", " << phase_stats.max << "] V" << std::endl;
+            tracepv::reporting::debug_output() << "  outer_v range: [" << outer_v_stats.min << ", " << outer_v_stats.max << "] V" << std::endl;
             for (std::size_t d = 0; d < devices.size(); ++d) {
                 const auto current_stats = stats_for(devices[d].fundamental_i.y);
-                std::cerr << "  device " << d
+                tracepv::reporting::debug_output() << "  device " << d
                           << " fundamental_i rms=" << current_stats.rms
                           << " A, max=" << current_stats.max
                           << " A, rise_edges=" << devices[d].rising_i.t.size()
@@ -826,20 +827,20 @@ IgbtReferenceThermalResult run_thermal(const LossTable& l1, const LossTable& l2,
             const auto s2 = stats_for_loss(l2);
             const auto s3 = stats_for_loss(l3);
             const auto s4 = stats_for_loss(l4);
-            std::cerr << "DEBUG: IGBT reference loss table stats:" << std::endl;
-            std::cerr << "  loss_tavg=" << loss_tavg
+            tracepv::reporting::debug_output() << "DEBUG: IGBT reference loss table stats:" << std::endl;
+            tracepv::reporting::debug_output() << "  loss_tavg=" << loss_tavg
                       << " s, thermal_dt=" << thermal_dt
                       << " s, t_end=" << t_end
                       << " s, ambient=" << ambient << " C" << std::endl;
-            std::cerr << "  IGBT1 loss range/mean: [" << s1.min << ", " << s1.max
+            tracepv::reporting::debug_output() << "  IGBT1 loss range/mean: [" << s1.min << ", " << s1.max
                       << "] W, mean=" << s1.mean << " W" << std::endl;
-            std::cerr << "  IGBT2 loss range/mean: [" << s2.min << ", " << s2.max
+            tracepv::reporting::debug_output() << "  IGBT2 loss range/mean: [" << s2.min << ", " << s2.max
                       << "] W, mean=" << s2.mean << " W" << std::endl;
-            std::cerr << "  Diode1 loss range/mean: [" << s3.min << ", " << s3.max
+            tracepv::reporting::debug_output() << "  Diode1 loss range/mean: [" << s3.min << ", " << s3.max
                       << "] W, mean=" << s3.mean << " W" << std::endl;
-            std::cerr << "  Diode2 loss range/mean: [" << s4.min << ", " << s4.max
+            tracepv::reporting::debug_output() << "  Diode2 loss range/mean: [" << s4.min << ", " << s4.max
                       << "] W, mean=" << s4.mean << " W" << std::endl;
-            std::cerr << "  Estimated inverter loss from table means: "
+            tracepv::reporting::debug_output() << "  Estimated inverter loss from table means: "
                       << 6.0 * (s1.mean + s2.mean + s3.mean + s4.mean) << " W" << std::endl;
         });
     }

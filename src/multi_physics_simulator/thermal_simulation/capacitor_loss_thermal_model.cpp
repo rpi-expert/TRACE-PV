@@ -251,6 +251,18 @@ std::vector<std::pair<double, double>> harmonic_rms(const std::vector<double>& t
     return harmonics;
 }
 
+void scale_harmonic_currents(
+    std::vector<std::pair<double, double>>& harmonics,
+    double current_scale) {
+    if (!std::isfinite(current_scale) || current_scale <= 0.0) {
+        throw std::invalid_argument(
+            "Capacitor harmonic current_scale must be finite and greater than zero");
+    }
+    for (auto& harmonic : harmonics) {
+        harmonic.second *= current_scale;
+    }
+}
+
 double loss_at_temperature(const std::vector<std::pair<double, double>>& harmonics,
                            const EsrTable& esr_table,
                            double temp_c) {
@@ -466,7 +478,8 @@ CapacitorReferenceThermalResult calculate_capacitor_reference_thermal(
     double ambient_temperature,
     double rth_surface_ambient,
     double rth_core_surface,
-    const std::string& esr_table_path) {
+    const std::string& esr_table_path,
+    double current_scale) {
     CapacitorReferenceThermalResult result;
     try {
         const auto& esr_table = cached_esr_table(esr_table_path);
@@ -482,6 +495,7 @@ CapacitorReferenceThermalResult calculate_capacitor_reference_thermal(
             result.harmonic_extraction_s =
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - harmonic_start).count();
         }
+        scale_harmonic_currents(harmonics, current_scale);
         if (harmonics.empty()) {
             result.message = "No capacitor harmonics could be extracted.";
             return result;
@@ -568,6 +582,7 @@ std::vector<CapacitorReferenceThermalResult> calculate_capacitor_reference_therm
                 results[i].harmonic_extraction_s =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - harmonic_start).count();
             }
+            scale_harmonic_currents(batch_harmonics[i], input.current_scale);
             if (batch_harmonics[i].empty()) {
                 results[i].message = "No capacitor harmonics could be extracted.";
             } else {

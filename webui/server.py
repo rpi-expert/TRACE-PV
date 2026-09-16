@@ -526,6 +526,9 @@ def build_args(payload):
         raise ValueError("Invalid input mode")
 
     args = [str(SIM_BINARY), "--topology", topology, "--input-mode", input_mode]
+    # Dashboard temperature/loss cards still read detailed diagnostics from the
+    # run log; opt in explicitly now that standalone CLI output is concise.
+    args.append("--verbose")
     if input_mode == "static":
         args.extend([
             "--static-temp", str(payload.get("staticTemp", 25)),
