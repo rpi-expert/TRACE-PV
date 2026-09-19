@@ -19,7 +19,10 @@
     },
     "pv_panel": {
       "part_number": "CS6U-330P",
-      "description": "PV panel for solar energy generation"
+      "description": "PV panel for solar energy generation",
+      "iv_database": "component_database/runtime_iv_curves.db",
+      "modules_per_string": 18,
+      "parallel_strings": 6
     },
     "pv_inverter": {
       "part_number": "SMA_Sunny_Tripower_30000TL-US-10",
@@ -31,4 +34,3 @@
     }
   }
 }
-

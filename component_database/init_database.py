@@ -333,7 +333,7 @@ def load_power_module(conn, json_file_path):
         deltaT_coeffs.get('Ea', 0.042),
         arrhenius_coeffs.get('A', 259.6930),
         arrhenius_coeffs.get('n1', 2.66),
-        arrhenius_coeffs.get('n2', 2.2),
+        arrhenius_coeffs.get('n2', -2.2),
         arrhenius_coeffs.get('Ea', 0.79),
         arrhenius_coeffs.get('RH_ref', 95.0),
         arrhenius_coeffs.get('T_ref', 348.15),
@@ -553,4 +553,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -10,7 +10,7 @@
     "arrhenius_model": {
       "A": 809.374,
       "n1": 4.64,
-      "n2": 2.2,
+      "n2": -2.2,
       "Ea": 0.95,
       "RH_ref": 95,
       "T_ref": 348.15,
@@ -19,4 +19,3 @@
   },
   "description": "SMA IGBT power module"
 }
-

@@ -15,6 +15,10 @@ struct SimulationModel {
     std::string pv_inverter_part_number;
     std::string grid_part_number;
     
+    std::string iv_database_path = "component_database/component_parameters.db";
+    int pv_modules_per_string = 1;
+    int pv_parallel_strings = 1;
+
     // Default constructor
     SimulationModel() = default;
 };

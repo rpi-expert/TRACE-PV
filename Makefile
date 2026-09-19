@@ -10,10 +10,14 @@ SRC_DIR   := src
 CPP_SRCS  := $(SRC_DIR)/main.cpp \
              $(SRC_DIR)/simulation_params.cpp \
              $(SRC_DIR)/simulation_case.cpp \
-             $(SRC_DIR)/simulation_model.cpp \
-             $(SRC_DIR)/multi_physics_simulator/electrical_simulation/modulation.cpp \
+	             $(SRC_DIR)/simulation_model.cpp \
+             $(SRC_DIR)/model_validation/intermediate_value_exporter.cpp \
+             $(SRC_DIR)/reporting/run_report.cpp \
+	             $(SRC_DIR)/multi_physics_simulator/electrical_simulation/modulation.cpp \
              $(SRC_DIR)/multi_physics_simulator/electrical_simulation/gpu_capacity.cpp \
              $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.cpp \
+             $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.cpp \
+             $(SRC_DIR)/multi_physics_simulator/thermal_simulation/igbt_loss_thermal_model.cpp \
              $(SRC_DIR)/simulation_preparation/pv_voltage_iv_curve.cpp \
              $(SRC_DIR)/simulation_preparation/mission_profile_loader.cpp \
              $(SRC_DIR)/reliability_assessment/pcb_reliability.cpp \
@@ -22,9 +26,9 @@ CPP_SRCS  := $(SRC_DIR)/main.cpp \
              component_database/component_database.cpp
 
 CU_SRCS   := $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.cu \
-             $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.cu \
-             $(SRC_DIR)/multi_physics_simulator/thermal_simulation/loss_model.cu \
-             $(SRC_DIR)/multi_physics_simulator/thermal_simulation/thermal_model.cu \
+	             $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.cu \
+	             $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.cu \
+	             $(SRC_DIR)/multi_physics_simulator/thermal_simulation/igbt_reference_gpu.cu \
              $(SRC_DIR)/reliability_assessment/capacitor_reliability.cu \
              $(SRC_DIR)/reliability_assessment/fan_cooling_reliability.cu \
              $(SRC_DIR)/reliability_assessment/igbt_reliability.cu \
@@ -34,15 +38,19 @@ CU_SRCS   := $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.cu
 OBJS      := $(BIN_DIR)/main.o \
              $(BIN_DIR)/simulation_params.o \
              $(BIN_DIR)/simulation_case.o \
-             $(BIN_DIR)/simulation_model.o \
-             $(BIN_DIR)/modulation.o \
+	             $(BIN_DIR)/simulation_model.o \
+             $(BIN_DIR)/intermediate_value_exporter.o \
+             $(BIN_DIR)/run_report.o \
+	             $(BIN_DIR)/modulation.o \
              $(BIN_DIR)/gpu_capacity.o \
              $(BIN_DIR)/internal_conditions.o \
+             $(BIN_DIR)/capacitor_loss_thermal_model.o \
+             $(BIN_DIR)/igbt_loss_thermal_model.o \
              $(BIN_DIR)/pv_voltage_iv_curve.o \
-             $(BIN_DIR)/mission_profile_loader.o \
-             $(BIN_DIR)/stress_calculation.o \
-             $(BIN_DIR)/loss_model.o \
-             $(BIN_DIR)/thermal_model.o \
+	             $(BIN_DIR)/mission_profile_loader.o \
+	             $(BIN_DIR)/stress_calculation.o \
+	             $(BIN_DIR)/capacitor_reference_gpu.o \
+	             $(BIN_DIR)/igbt_reference_gpu.o \
              $(BIN_DIR)/capacitor_reliability.o \
              $(BIN_DIR)/fan_cooling_reliability.o \
              $(BIN_DIR)/igbt_reliability.o \
@@ -67,17 +75,27 @@ NVCC_DC_FLAGS := $(NVCC_FLAGS) -dc  # Device code compilation flag for separate 
 all: $(TARGET_PATH)
 
 # Device link objects (CUDA files that need device linking)
-DEVICE_LINK_OBJS := $(BIN_DIR)/a2s_gpu_dlink.o $(BIN_DIR)/stress_calculation_dlink.o $(BIN_DIR)/loss_model_dlink.o $(BIN_DIR)/thermal_model_dlink.o $(BIN_DIR)/capacitor_reliability_dlink.o $(BIN_DIR)/fan_cooling_reliability_dlink.o $(BIN_DIR)/igbt_reliability_dlink.o $(BIN_DIR)/reliability_kernels_dlink.o
+DEVICE_LINK_OBJS := $(BIN_DIR)/a2s_gpu_dlink.o $(BIN_DIR)/stress_calculation_dlink.o $(BIN_DIR)/capacitor_reliability_dlink.o $(BIN_DIR)/fan_cooling_reliability_dlink.o $(BIN_DIR)/igbt_reliability_dlink.o $(BIN_DIR)/reliability_kernels_dlink.o
 
 $(TARGET_PATH): $(OBJS)
 	@mkdir -p $(BIN_DIR)
 	# First, create device link objects from CUDA object files
-	$(NVCC) $(NVCC_FLAGS) -dlink $(BIN_DIR)/a2s_gpu.o $(BIN_DIR)/stress_calculation.o $(BIN_DIR)/loss_model.o $(BIN_DIR)/thermal_model.o $(BIN_DIR)/capacitor_reliability.o $(BIN_DIR)/fan_cooling_reliability.o $(BIN_DIR)/igbt_reliability.o $(BIN_DIR)/reliability_kernels.o -o $(BIN_DIR)/device_link.o
+	$(NVCC) $(NVCC_FLAGS) -dlink $(BIN_DIR)/a2s_gpu.o $(BIN_DIR)/stress_calculation.o $(BIN_DIR)/capacitor_reference_gpu.o $(BIN_DIR)/igbt_reference_gpu.o $(BIN_DIR)/capacitor_reliability.o $(BIN_DIR)/fan_cooling_reliability.o $(BIN_DIR)/igbt_reliability.o $(BIN_DIR)/reliability_kernels.o -o $(BIN_DIR)/device_link.o
 	# Then link everything together
 	$(NVCC) $(NVCC_FLAGS) $(OBJS) $(BIN_DIR)/device_link.o -o $@ $(SQLITE3_LIBS)
 
 # Compile main.cpp
-$(BIN_DIR)/main.o: $(SRC_DIR)/main.cpp
+$(BIN_DIR)/main.o: $(SRC_DIR)/main.cpp \
+                   $(SRC_DIR)/simulation_preparation/iv_database.h \
+                   $(SRC_DIR)/simulation_model.h \
+                   $(SRC_DIR)/model_validation/intermediate_value_exporter.h \
+                   $(SRC_DIR)/reporting/run_report.h \
+                   $(SRC_DIR)/reporting/console_output.h \
+                   $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.h \
+                   $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.h \
+                   $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.h \
+                   $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.h \
+                   $(SRC_DIR)/multi_physics_simulator/thermal_simulation/simplified_loss_thermal.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
@@ -96,6 +114,15 @@ $(BIN_DIR)/simulation_model.o: $(SRC_DIR)/simulation_model.cpp
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
+# Compile model-validation CSV exporter
+$(BIN_DIR)/intermediate_value_exporter.o: $(SRC_DIR)/model_validation/intermediate_value_exporter.cpp $(SRC_DIR)/model_validation/intermediate_value_exporter.h
+	@mkdir -p $(BIN_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+
+$(BIN_DIR)/run_report.o: $(SRC_DIR)/reporting/run_report.cpp $(SRC_DIR)/reporting/run_report.h
+	@mkdir -p $(BIN_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+
 # Compile modulation.cpp
 $(BIN_DIR)/modulation.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/modulation.cpp
 	@mkdir -p $(BIN_DIR)
@@ -107,7 +134,16 @@ $(BIN_DIR)/gpu_capacity.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulat
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 # Compile internal_conditions.cpp
-$(BIN_DIR)/internal_conditions.o: $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.cpp
+$(BIN_DIR)/internal_conditions.o: $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.cpp $(SRC_DIR)/multi_physics_simulator/environmental_simulation/internal_conditions.h
+	@mkdir -p $(BIN_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+
+# Compile IGBT reference loss/thermal model
+$(BIN_DIR)/capacitor_loss_thermal_model.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.cpp $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.h $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.h
+	@mkdir -p $(BIN_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+
+$(BIN_DIR)/igbt_loss_thermal_model.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/igbt_loss_thermal_model.cpp $(SRC_DIR)/reporting/console_output.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
@@ -122,22 +158,20 @@ $(BIN_DIR)/mission_profile_loader.o: $(SRC_DIR)/simulation_preparation/mission_p
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 # Compile a2s_gpu.cu (with device code flag for separate compilation)
-$(BIN_DIR)/a2s_gpu.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.cu
+$(BIN_DIR)/a2s_gpu.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.cu $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_DC_FLAGS) -c $< -o $@
 
 # Compile stress_calculation.cu (with device code flag for separate compilation)
-$(BIN_DIR)/stress_calculation.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.cu
+$(BIN_DIR)/stress_calculation.o: $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.cu $(SRC_DIR)/multi_physics_simulator/electrical_simulation/stress_calculation.h $(SRC_DIR)/multi_physics_simulator/electrical_simulation/a2s_gpu.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_DC_FLAGS) -c $< -o $@
 
-# Compile loss_model.cu (with device code flag for separate compilation)
-$(BIN_DIR)/loss_model.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/loss_model.cu
+$(BIN_DIR)/capacitor_reference_gpu.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.cu $(SRC_DIR)/multi_physics_simulator/thermal_simulation/capacitor_reference_gpu.h
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_DC_FLAGS) -c $< -o $@
 
-# Compile thermal_model.cu (with device code flag for separate compilation)
-$(BIN_DIR)/thermal_model.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/thermal_model.cu
+$(BIN_DIR)/igbt_reference_gpu.o: $(SRC_DIR)/multi_physics_simulator/thermal_simulation/igbt_reference_gpu.cu
 	@mkdir -p $(BIN_DIR)
 	$(NVCC) $(NVCC_DC_FLAGS) -c $< -o $@
 
@@ -217,4 +251,28 @@ clean:
 	rm -f $(OBJS) $(TARGET_PATH) $(BIN_DIR)/device_link.o
 	find $(BIN_DIR) -name "*.o" -type f -delete 2>/dev/null || true
 
-.PHONY: all run clean
+# Output/reporting contract tests run on a C++17 host without CUDA.
+HOST_CXX ?= c++
+HOST_TEST_DIR := $(BIN_DIR)/host-tests
+
+test-reporting:
+	@mkdir -p $(HOST_TEST_DIR)
+	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pedantic -I$(SRC_DIR) tests/run_report_test.cpp $(SRC_DIR)/reporting/run_report.cpp -o $(HOST_TEST_DIR)/run_report_test
+	$(HOST_TEST_DIR)/run_report_test
+	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -I$(SRC_DIR) tests/console_output_test.cpp -o $(HOST_TEST_DIR)/console_output_test
+	$(HOST_TEST_DIR)/console_output_test
+	CXX="$(HOST_CXX)" python3 tests/output_cli_test.py
+
+test-loss-thermal-cleanup:
+	@mkdir -p $(HOST_TEST_DIR)
+	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pedantic -I$(SRC_DIR) tests/simplified_loss_thermal_test.cpp -o $(HOST_TEST_DIR)/simplified_loss_thermal_test
+	$(HOST_TEST_DIR)/simplified_loss_thermal_test
+
+.PHONY: all run clean test-reporting test-loss-thermal-cleanup
+
+# CPU-only validation of mission cleaning and the runtime IV database.
+.PHONY: test-mission-iv
+test-mission-iv:
+	@mkdir -p $(HOST_TEST_DIR)
+	$(HOST_CXX) -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -I$(SRC_DIR) $(SQLITE3_CFLAGS) tests/mission_iv_input_test.cpp $(SRC_DIR)/simulation_preparation/mission_profile_loader.cpp $(SRC_DIR)/simulation_model.cpp -lsqlite3 -o $(HOST_TEST_DIR)/mission_iv_input_test
+	$(HOST_TEST_DIR)/mission_iv_input_test

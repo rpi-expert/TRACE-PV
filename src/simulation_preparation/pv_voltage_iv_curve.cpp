@@ -32,9 +32,16 @@ void update_params_for_case(SimulationParameters& params,
         params.v_pv = calculate_pv_voltage(sc.ambient_temperature, sc.solar_irradiance);
     }
     
-    // Update AC voltage (vg_mag is peak phase voltage, ac_voltage is RMS line-to-line)
+    // Update AC voltage (vg_mag is peak phase voltage, ac_voltage is RMS line-to-line).
+    // Keep the database's small inverter-reference margin over grid peak, but scale it
+    // with each mission/static case instead of leaving the reference at the nominal grid.
+    const double reference_to_grid_peak =
+        (params.vg_mag > 0.0)
+            ? params.reference_phase_magnitude / (params.vg_mag * std::sqrt(2.0))
+            : 1.0;
     // vg_mag = (ac_voltage / sqrt(3)) * sqrt(2) = ac_voltage * sqrt(2/3)
     params.vg_mag = sc.ac_voltage * std::sqrt(2.0 / 3.0);
+    params.reference_phase_magnitude = params.vg_mag * reference_to_grid_peak;
     
     // Recalculate boost duty if stage 2
     if (params.model_stage == 2) {
@@ -42,4 +49,3 @@ void update_params_for_case(SimulationParameters& params,
             (1.0 - params.v_pv / params.vdc_target) : 0.0;
     }
 }
-

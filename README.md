@@ -1,256 +1,200 @@
 # TRACE-PV
 
-TRACE-PV is a GPU-accelerated multi-physics simulator for photovoltaic inverter reliability assessment. It combines electrical, thermal, and environmental simulation with component degradation models driven by mission profiles and a component database.
+TRACE-PV is a C++/CUDA simulator for photovoltaic inverter electrical stress, loss, temperature, humidity and component degradation. Run commands below from the **repository root** in a Bash shell. Start with the two-case smoke test before running a full mission profile.
 
-## Runtime Setup
+## 1. Check the Linux/CUDA host
 
-### Prerequisites
-
-- **Linux** with a **NVIDIA GPU** and CUDA toolkit (`/usr/local/cuda` by default)
-- **Python 3.8+** (standard library only for database scripts; `pandas` and `requests` for NSRDB download)
-- **g++** and **nvcc** for building the simulator
-
-### 1. Activate the environment
-
-From the project root:
+You need an NVIDIA GPU, a CUDA toolkit that supports that GPU, a compatible C++17 compiler, GNU Make, SQLite development files, and Python 3.10 or newer. Python is used for preparing inputs/databases and the optional WebUI; the simulator itself is a compiled binary.
 
 ```bash
-source setup_env.sh
+git clone https://github.com/rpi-expert/TRACE-PV.git
+cd TRACE-PV
+nvidia-smi
+nvcc --version
+g++ --version
+python3 --version
 ```
 
-This script:
+`nvidia-smi` reports the driver's supported CUDA version, which may differ from the installed toolkit shown by `nvcc`. V100 requires a toolkit that still targets `sm_70`, such as CUDA 12.8. Install toolkit packages only on a managed GPU host; do not replace its NVIDIA driver.
 
-- Adds `sqlite3/lib` to `LD_LIBRARY_PATH`
-- Activates the project virtual environment at `venv/`
-- Prepends CUDA tools to `PATH`
+On Ubuntu/Debian, install missing host dependencies:
 
-### 2. Set up the Python virtual environment
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libsqlite3-dev python3-venv
+```
 
-If `venv/` does not exist or is broken, create and populate it:
+Omit `sudo` when already root. If CUDA is not under `/usr/local/cuda`, set `CUDA_PATH` to the installed toolkit directory before sourcing the environment script.
+
+## 2. Create the Python environment
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
+source setup_env.sh
 ```
 
-The NSRDB download wrapper (`simulator_inputs/scripts/run_nrsdb.sh`) uses this project-level `venv/`.
+Do not copy a macOS virtual environment or compiled binary to Linux. Recreate the environment and build on the target host. `setup_env.sh` activates an existing `venv`, adds CUDA to `PATH`, and adds the optional project SQLite library to `LD_LIBRARY_PATH`; it does not install dependencies.
 
-### 3. Initialize the component database
+## 3. Prepare both databases
 
-First-time setup (or after adding new component JSON files):
+The default model needs a **component database** and a separate **runtime I–V curve database**:
 
 ```bash
-cd component_database
-python3 initialize_all.py
-python3 verify_database.py
+python3 component_database/initialize_all.py --skip-legacy-pv
+python3 tools/build_runtime_iv_database.py
 ```
 
-This creates `component_database/component_parameters.db`, loads component parameters (capacitor, fan, power module, PCB), and generates PV panel IV-curve lookup data from `pv_panel/*.json`.
+The first command creates `component_database/component_parameters.db` from component JSON files, including inverter and grid tables. It leaves an existing database unchanged. To rebuild an existing database, first back it up, then use `--force --skip-legacy-pv`.
 
-To replace an existing generated database, run `python3 initialize_all.py --force`.
+The second command generates `component_database/runtime_iv_curves.db` for CS6U-330P, with an STC sanity check against the panel specification. It uses the 72-cell single-diode model and covers 0.01–1600 W/m² and −45–105 °C. Do not substitute the legacy offline I–V generator: its module thermal-voltage calculation omits the cell count.
 
-To regenerate PV performance data only:
+The default model JSON explicitly selects this I–V database and an **18s6p** array. For another panel/array, update `pv_panel.part_number`, `iv_database`, `modules_per_string`, and `parallel_strings`, and generate matching curves using the tool's `--panel`/`--output` options. Invalid curves or queries outside the database grid fail explicitly.
+
+### Thermal lookup data
+
+Detailed thermal simulation additionally needs the project data files under:
+
+- `IGBT/MATLAB_code/parameters/` (all CSV lookup tables)
+- `Capacitor/cpp_standalone/data/esr_data.csv`
+
+These research assets are not present in the current GitHub source checkout. Obtain them from the project data package and preserve these relative paths before running the GPU smoke test. The server deployment includes them. Without them, a successful build can still fall back to simplified thermal models; it is not a complete detailed-model deployment.
+
+## 4. Build and test
 
 ```bash
-cd component_database
-python3 offline_trainning/offline_data_generator.py component_parameters.db pv_panel
+make -j2
+./bin/trace_pv --help
+make test-mission-iv
+make test-reporting
+make test-loss-thermal-cleanup
 ```
 
-See `component_database/INITIALIZATION_GUIDE.md` for details.
-
-### 4. Build the simulator
+The Makefile detects GPU compute capability and prefers bundled SQLite if present, otherwise system SQLite. To set a nonstandard toolkit or explicit GPU target:
 
 ```bash
-make
+make -j2 CUDA_PATH=/usr/local/cuda-12.8 GPU_SM=70
 ```
 
-The Makefile auto-detects the GPU compute capability (e.g. `sm_90` for H200) and links against the bundled SQLite library in `sqlite3/`.
+`test-mission-iv` checks the default panel configuration, cleaning rules and curve interpolation. It also checks the full split mission profile when the environmental CSV is available. Tests and generated databases should be refreshed after changing the model configuration.
 
-If linking fails due to a GLIBC mismatch with the pre-built `sqlite3/lib/libsqlite3.so`, rebuild SQLite locally:
+### Two-case GPU smoke test
+
+This committed fixture has no AC-power column, so it exercises the electrical-power prepass, I–V lookup, environmental model, and downstream simulation:
 
 ```bash
-# Example: rebuild from the SQLite amalgamation into sqlite3/lib/
-gcc -shared -fPIC -O2 sqlite3.c -o sqlite3/lib/libsqlite3.so -ldl -lpthread -lm
-make clean && make
+./bin/trace_pv --topology 3l2s \
+  --mission-csv tests/fixtures/deployment_mission.csv \
+  --max-iterations 1 --ngpus 1 --batch-size-limit 1 --pipeline off \
+  --verbose --wall-time --lifetime --output-dir results/deployment_smoke \
+  --validation-output-dir results/deployment_smoke/validation \
+  --validation-waveform-cases none
 ```
 
-### 5. Prepare mission profile inputs (optional)
+Check the exit status, console warnings and generated reports. Expected progress includes `TRACEPV_IV`, `TRACEPV_POWER_PREPASS` and mission-round progress. A completed smoke test confirms execution; it does not establish field accuracy or annual lifetime validity.
 
-Mission profiles are loaded automatically from fixed paths (see [Running the Code](#running-the-code)). To download environmental data from NRSDB:
+## 5. Prepare and run mission data
 
-```bash
-cp .env.example .env
-# Edit .env with your NREL API key and contact email.
-source .env
-./simulator_inputs/scripts/run_nrsdb.sh
-```
+The default split files are:
 
-The credentials remain local because `.env` is excluded from Git. The download
-script recreates
-`simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv`.
+| File | Columns |
+|---|---|
+| `simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv` | `time,ambient_temperature,rh,GHI` |
+| `simulator_inputs/mission_profile/operating_condition/operating_mission_profile.csv` | `time,ac_voltage` |
 
----
+Supply your field/environmental CSVs at these paths or pass `--environmental-csv` and `--operating-csv`. A fresh GitHub clone may not contain the local environmental dataset. The two-case fixture above works without it. The optional NSRDB download workflow is under `simulator_inputs/scripts/`; it requires separate API credentials and does not create field operating measurements.
 
-## Running the Code
+Split inputs are joined by timestamp and retain environmental-file order; provide chronological, unique timestamps. Units are °C, RH percent (0–100), GHI W/m², and AC RMS line-to-line volts. Input cleaning rejects exact −1 °C sentinels, RH ≤1% or >100%, non-finite fields, nonpositive GHI/voltage, and unmatched records. Other subzero temperatures are allowed. Raw CSVs are not rewritten.
 
-### Simulator binary
-
-```bash
-./bin/trace_pv --topology <TOPOLOGY> [OPTIONS]
-```
-
-#### Required
-
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--topology` | `-t` | Inverter topology: `2l2s`, `2l1s`, `3l2s`, or `3l1s` |
-
-| Topology | Meaning |
-|----------|---------|
-| `2l2s` | Two-level, two-stage |
-| `2l1s` | Two-level, single-stage |
-| `3l2s` | Three-level, two-stage |
-| `3l1s` | Three-level, single-stage |
-
-#### Optional
-
-| Option | Short | Default | Description |
-|--------|-------|---------|-------------|
-| `--rounds` | `-r` | `1` | Number of rounds to process per mission-profile iteration |
-| `--modulation` | `-m` | `svm` | Modulation strategy: `svm` or `spwm` |
-| `--ngpus` | `-g` | all available | Number of GPUs to use, or `all` |
-| `--model` | `-M` | `simulator_inputs/simulation_model/example_simulation_model.json` | Simulation model JSON with component part numbers |
-| `--input-mode` | | `mission` | Input mode: `mission` or `static` |
-| `--mission-csv` / `--csv` | `-c` | unset | Combined mission profile CSV |
-| `--environmental-csv` | | fixed default | Environmental CSV for split mission profile mode |
-| `--operating-csv` | | fixed default | Operating CSV for split mission profile mode |
-| `--static-temp` | | `95` | Static ambient temperature in Celsius |
-| `--static-rh` | | `95` | Static relative humidity in percent |
-| `--static-voltage` | | `500` | Static AC voltage RMS line-to-line in volts |
-| `--static-power` | | `300` | Static AC power in watts for the thermal model |
-| `--static-irradiance` | | `1000` | Static solar irradiance in W/m² |
-| `--static-cases` | | `1` | Number of repeated static cases |
-
-#### Input modes
-
-Mission profile mode is the default. If no CSV path is supplied, mission profiles are read from:
-
-- `simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv`
-- `simulator_inputs/mission_profile/operating_condition/operating_mission_profile.csv`
-
-You can also pass one combined CSV with:
-
-```bash
-./bin/trace_pv --topology 3l2s --mission-csv simulator_inputs/mission_profile/year_long_mission_profile_2024.csv
-```
-
-Combined mission CSV columns:
+Alternatively, use a combined CSV:
 
 ```text
-time,ambient_temperature,rh,GHI,ac_voltage[,ac_power]
+time,ambient_temperature,rh,GHI,ac_voltage[,ac_power[,internal_temperature]]
 ```
 
-Static mode creates repeated cases using one set of values. Defaults match the requested stress case: `temp=95`, `rh=95`, `voltage=500`, `power=300`.
+AC power is **not required**. When absent, the electrical simulator calculates mean instantaneous AC power before the chronological environmental calculation. This preliminary pass retains scalar power and one case's waveforms at a time, adding computation. Explicit supplied AC power retains its override behavior. An optional internal-temperature measurement overrides the downstream boundary while preserving the model prediction for validation.
+
+Start a full-profile run with conservative memory settings:
+
+```bash
+./bin/trace_pv --topology 3l2s --max-iterations 1 \
+  --ngpus 1 --batch-size-limit 1 --pipeline off \
+  --wall-time --lifetime --output-dir results/mission_run
+```
+
+One iteration means one pass through **accepted records**, not necessarily a complete calendar year. `--rounds` partitions that pass. The default `--max-iterations 0` repeats until the degradation stopping criterion; specify a positive limit for deployment tests. Increase batch size or enable the pipeline only after measuring host RAM and GPU memory use. More GPUs can increase host memory demand.
+
+### Static conditions
 
 ```bash
 ./bin/trace_pv --topology 3l2s --input-mode static \
-  --static-temp 95 --static-rh 95 --static-voltage 500 --static-power 300
+  --static-temp 25 --static-rh 50 --static-voltage 480 \
+  --static-power 300 --static-irradiance 1000 --static-cases 2 \
+  --max-iterations 1 --ngpus 1 --batch-size-limit 1 --pipeline off
 ```
 
-The simulation model JSON specifies component part numbers (capacitor, power module, fan, PCB, PV panel, etc.) that must exist in `component_database/`. See `simulator_inputs/simulation_model/README.md`.
+Static mode uses its explicitly provided AC power. Its defaults are 95 °C, 95% RH, 500 V, 300 W, 1000 W/m² and 105,120 cases; override them for a short test. Such high-temperature conditions are stress scenarios, not a validation against field operation.
 
-#### Examples
+## 6. Options and outputs
+
+Use `./bin/trace_pv --help` for the complete current option list.
+
+| Option | Purpose |
+|---|---|
+| `--topology` | Required: `2l2s`, `2l1s`, `3l2s`, `3l1s`; `l` denotes levels and `s` stages |
+| `--modulation` | `svm` (default) or `spwm` |
+| `--model` | Component/array JSON; defaults to `simulator_inputs/simulation_model/example_simulation_model.json` |
+| `--ngpus` | GPU count or `all` (default) |
+| `--max-iterations` | Profile repeat limit; `0` is unlimited |
+| `--rounds` | Partitions within an iteration; default `1` |
+| `--batch-size-limit`, `--pipeline` | Limit batch size and select `on`/`off` overlap |
+| `--verbose` | Detailed diagnostic/profiling output |
+| `--wall-time`, `--lifetime` | Enable optional summary reports |
+| `--output-dir` | Directory for enabled summary reports |
+| `--validation-output-dir` | Export model-validation intermediates |
+| `--validation-waveform-cases` | `none`, `all`, or comma-separated zero-based indices |
+
+`--wall-time`, `--lifetime`, and `--verbose` are presence-only flags. `--output-dir` does not redirect existing thermal/stressor CSVs or validation exports. Use distinct output directories; selected report filenames are overwritten on rerun. Avoid `all` waveform exports for full-year profiles because they can be large.
+
+Lifetime reports are constant-average-damage projections based on accepted five-minute cases. They do not fill calendar gaps. See [report definitions](docs/OUTPUT_REPORTS.md) and [validation export definitions](docs/MODEL_VALIDATION.md).
+
+## 7. Optional WebUI and SSH access
+
+The UI needs Node.js/npm for its frontend build; the Python HTTP backend uses the standard library:
 
 ```bash
-# Minimal run
-./bin/trace_pv --topology 3l2s
-
-# Custom model, modulation, and GPU count
-./bin/trace_pv --topology 2l2s --modulation spwm --ngpus 1 \
-  --model simulator_inputs/simulation_model/example_simulation_model.json
-
-# Run a provided combined mission profile CSV
-./bin/trace_pv --topology 3l2s \
-  --mission-csv simulator_inputs/mission_profile/year_long_mission_profile_2024.csv
-
-# Run static stress conditions for all cases
-./bin/trace_pv --topology 3l2s --input-mode static \
-  --static-temp 95 --static-rh 95 --static-voltage 500 --static-power 300
-
-# Multiple rounds per iteration
-./bin/trace_pv --topology 3l1s --rounds 6 --ngpus all
+(cd webui && npm ci && npm run build)
+source setup_env.sh
+TRACEPV_WEBUI_HOST=127.0.0.1 TRACEPV_WEBUI_PORT=8080 python3 webui/server.py
 ```
 
-#### Batch runner
-
-To run all configured topology/modulation combinations and save timestamped results:
+For persistent deployment, run this backend under the host's service manager. Keep it bound to localhost when using SSH forwarding. From your own computer:
 
 ```bash
-./run_all_configs.sh [ROUNDS] [NGPUS] [MODEL_FILE]
+ssh -p <SSH_PORT> -L 8080:localhost:8080 root@<SERVER_IP>
 ```
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `ROUNDS` | `6` | Rounds per mission-profile iteration |
-| `NGPUS` | `all` | GPU count or `all` |
-| `MODEL_FILE` | `simulator_inputs/simulation_model/example_simulation_model.json` | Simulation model JSON |
+Open <http://localhost:8080>. On Vast images, noninteractive shells may need `. /opt/nvm/nvm.sh` before invoking npm. See [WebUI guide](webui/README.md).
 
-Output is written to `results/results_<timestamp>/`.
+## Troubleshooting and model boundaries
 
-#### Make shortcut
+- **`Killed` with no C++ error:** inspect process peak RAM and scheduler/container OOM records; start with batch size 1 and pipeline off. GPU memory alone does not determine host memory consumption.
+- **SQLite loader/GLIBC errors:** a copied `sqlite3/lib/libsqlite3.so` may not match the target Linux. Prefer host `libsqlite3-dev`, then rebuild with `make clean` and `make -j2 SQLITE3_PREFIX=/usr`; verify `ldd bin/trace_pv`. Avoid reusing foreign prebuilt libraries.
+- **No environment CSV:** provide field inputs or use the committed smoke fixture. Cloning source does not supply all local research datasets.
+- **I–V lookup failure:** check panel name, grid coverage and model database path; regenerate the runtime database after changing the panel.
+- The existing electrical model consumes the interpolated MPP **voltage**; it does not enforce a nonlinear PV current source. Lookup uses the provided mission temperature, currently ambient, not measured cell temperature. Deployment success does not validate these physical assumptions.
+- Detailed capacitor/IGBT thermal models have simplified fallback paths. Check warnings and exported model availability before interpreting results.
 
-```bash
-make run TOPOLOGY=2l2s ROUNDS=1 MOD=svm NGPUS=1
-make run TOPOLOGY=3l2s CSV=simulator_inputs/mission_profile/year_long_mission_profile_2024.csv
-make run TOPOLOGY=3l2s MODE=static
-```
+## Project layout and further reading
 
----
-
-## Development Progress
-
-### Database
-
-- [x] Mission Profile (Environmental) from NRSDB
-- [x] Mission Profile (Operating)
-- [x] PV Inverter Database
-- [x] PV Panel Database
-- [ ] Control Database
-
-### Simulator
-
-- [x] Electrical Simulation
-- [ ] Loss Simulation
-- [ ] Thermal Simulation
-- [ ] Environmental Simulation
-
-### Model Validation
-
-- [ ] Electrical Simulation
-- [ ] Loss Simulation
-- [ ] Thermal Simulation
-- [ ] Environmental Simulation
-
----
-
-## Project Layout
-
-```
-TRACE-PV/
-├── bin/                      # Generated simulator executable and objects
-├── component_database/       # Component JSON sources and database generators
-├── simulator_inputs/         # Mission profiles and simulation model JSON
-├── src/                      # C++/CUDA simulator source
-├── results/                  # Generated simulation output (not tracked)
-├── setup_env.sh              # Runtime environment activation
-├── Makefile                  # Build system
-└── run_all_configs.sh        # Batch simulation runner
-```
-
-## Further Reading
-
-- `component_database/INITIALIZATION_GUIDE.md` — Database setup
-- `simulator_inputs/README.md` — Input file formats
-- `src/README.md` — Simulator architecture and batch processing details
+- `src/` — electrical, environmental, thermal and reliability code
+- `component_database/` — component JSON sources and generated SQLite databases
+- `simulator_inputs/` — model configuration and mission inputs
+- `tools/`, `tests/` — database preparation and verification
+- `webui/` — React frontend and Python backend
+- `IGBT/MATLAB_code/parameters/`, `Capacitor/cpp_standalone/data/` — runtime thermal lookup tables
+- [Mission input and I–V changes](docs/mission_input_iv_power_fix.md)
+- [Simulation architecture](src/README.md)
+- [Input formats](simulator_inputs/README.md)

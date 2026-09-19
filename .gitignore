@@ -54,3 +54,7 @@ report/workflow/*.log
 report/workflow/*.out
 report/workflow/*.pdf
 report/workflow/qa_pages/
+
+# Reproducible runtime IV data and local deployment evidence
+component_database/runtime_iv_curves.db
+docs/deployment_*/evidence.tar.gz

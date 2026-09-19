@@ -1,17 +1,20 @@
+#include "simulation_preparation/iv_database.h"
 #include "multi_physics_simulator/electrical_simulation/a2s_gpu.h"
 #include "simulation_params.h"
 #include "simulation_case.h"
 #include "multi_physics_simulator/electrical_simulation/gpu_capacity.h"
 #include "multi_physics_simulator/electrical_simulation/stress_calculation.h"
-#include "multi_physics_simulator/thermal_simulation/loss_model.h"
-#include "multi_physics_simulator/thermal_simulation/thermal_model.h"
+#include "multi_physics_simulator/thermal_simulation/capacitor_loss_thermal_model.h"
+#include "multi_physics_simulator/thermal_simulation/igbt_loss_thermal_model.h"
+#include "multi_physics_simulator/thermal_simulation/simplified_loss_thermal.h"
 #include "multi_physics_simulator/environmental_simulation/internal_conditions.h"
 #include "component_database/component_database.h"
-// IVCurveSimulator converted to Python - commented out for now
-// #include "component_database/offline_trainning/iv_curve_simulator.h"
 #include "simulation_model.h"
 #include "simulation_preparation/pv_voltage_iv_curve.h"
 #include "simulation_preparation/mission_profile_loader.h"
+#include "model_validation/intermediate_value_exporter.h"
+#include "reporting/run_report.h"
+#include "reporting/console_output.h"
 #include "reliability_assessment/reliability_models.h"
 #include "reliability_assessment/rainflow_counting.h"
 #include "reliability_assessment/fan_cooling_reliability.h"
@@ -21,22 +24,193 @@
 #include "reliability_assessment/reliability_kernels.h"
 #include "reliability_assessment/reliability_kernels.h"
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <map>
 
 #include <chrono>
+#include <cstdio>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 #include <cmath>
 #include <omp.h>
 #include <cuda_runtime.h>
+#ifdef __linux__
+#include <malloc.h>
+#endif
 
 namespace {
+
+constexpr int kStaticCasesPerYear5Min = 365 * 24 * 12;
+constexpr double kCriticalDegradationStep = 0.10;
+
+struct ProfilingTotals {
+    double static_cache_electrical = 0.0;
+    double electrical_gpu = 0.0;
+    double stress_loss_thermal = 0.0;
+    double stress_calculation = 0.0;
+    double capacitor_loss = 0.0;
+    double power_module_loss = 0.0;
+    double capacitor_thermal = 0.0;
+    double capacitor_ref_harmonic = 0.0;
+    double capacitor_ref_esr_grid = 0.0;
+    double capacitor_ref_loss_grid = 0.0;
+    double capacitor_ref_polyfit = 0.0;
+    double capacitor_ref_iteration = 0.0;
+    double capacitor_fallback_static = 0.0;
+    double igbt_thermal = 0.0;
+    double igbt_parameter_lookup = 0.0;
+    double igbt_input_build = 0.0;
+    double igbt_loss_igbt1 = 0.0;
+    double igbt_loss_igbt2 = 0.0;
+    double igbt_loss_diode1 = 0.0;
+    double igbt_loss_diode2 = 0.0;
+    double igbt_thermal_rc = 0.0;
+    double fan_reliability = 0.0;
+    double capacitor_reliability = 0.0;
+    double igbt_reliability = 0.0;
+    double pcb_reliability = 0.0;
+    double stressor_csv = 0.0;
+};
+
+struct CaseStressorRecord {
+    int case_index = 0;
+    double fan_electrical_external = 0.0;
+    double fan_electrical_internal = 0.0;
+    double fan_mechanical_external = 0.0;
+    double fan_mechanical_internal = 0.0;
+    double capacitor = 0.0;
+    double igbt_deltaT = 0.0;
+    double igbt_arrhenius = 0.0;
+    double pcb = 0.0;
+};
+
+struct RoundStressorTotals {
+    double fan_electrical_external = 0.0;
+    double fan_electrical_internal = 0.0;
+    double fan_mechanical_external = 0.0;
+    double fan_mechanical_internal = 0.0;
+    double capacitor = 0.0;
+    double igbt_deltaT = 0.0;
+    double igbt_arrhenius = 0.0;
+    double pcb = 0.0;
+};
+
+using DegradationParameterState = std::array<int, 8>;
+using DegradationValues = std::array<double, 8>;
+
+int days_in_calendar_month(int year, int month) {
+    static constexpr std::array<int, 12> kDays = {
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12) {
+        return 0;
+    }
+    int days = kDays[static_cast<std::size_t>(month - 1)];
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    if (month == 2 && leap) {
+        ++days;
+    }
+    return days;
+}
+
+bool parse_calendar_month_coordinate(const std::string& timestamp, double& coordinate) {
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    if (std::sscanf(timestamp.c_str(), "%d-%d-%d %d:%d:%d",
+                    &year, &month, &day, &hour, &minute, &second) != 6) {
+        return false;
+    }
+    const int days_in_month = days_in_calendar_month(year, month);
+    if (days_in_month <= 0 || day < 1 || day > days_in_month ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
+        second < 0 || second > 60) {
+        return false;
+    }
+    const double day_fraction =
+        (static_cast<double>(day - 1) +
+         (static_cast<double>(hour) +
+          (static_cast<double>(minute) + static_cast<double>(second) / 60.0) / 60.0) /
+             24.0) /
+        static_cast<double>(days_in_month);
+    coordinate = static_cast<double>(year * 12 + (month - 1)) + day_fraction;
+    return true;
+}
+
+struct RoundComputationCache {
+    bool valid = false;
+    DegradationParameterState parameter_state{};
+    RoundStressorTotals totals;
+    std::vector<CaseStressorRecord> records;
+    int cases_processed = 0;
+};
+
+template <typename T>
+void clear_vector_storage(std::vector<T>& values) {
+    std::vector<T>().swap(values);
+}
+
+void write_double_vector(std::ostream& out, const std::vector<double>& values) {
+    const std::uint64_t size = static_cast<std::uint64_t>(values.size());
+    out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+    if (!values.empty()) {
+        out.write(reinterpret_cast<const char*>(values.data()),
+                  static_cast<std::streamsize>(values.size() * sizeof(double)));
+    }
+}
+
+bool read_double_vector(std::istream& in, std::vector<double>& values) {
+    std::uint64_t size = 0;
+    in.read(reinterpret_cast<char*>(&size), sizeof(size));
+    if (!in) {
+        return false;
+    }
+    values.resize(static_cast<std::size_t>(size));
+    if (!values.empty()) {
+        in.read(reinterpret_cast<char*>(values.data()),
+                static_cast<std::streamsize>(values.size() * sizeof(double)));
+    }
+    return static_cast<bool>(in);
+}
+
+void write_igbt_time_value(std::ostream& out, const IgbtGpuTimeValue& tv) {
+    write_double_vector(out, tv.t);
+    write_double_vector(out, tv.y);
+}
+
+bool read_igbt_time_value(std::istream& in, IgbtGpuTimeValue& tv) {
+    return read_double_vector(in, tv.t) && read_double_vector(in, tv.y);
+}
+
+void write_igbt_device_input(std::ostream& out, const IgbtGpuDeviceInput& device) {
+    write_igbt_time_value(out, device.fundamental_i);
+    write_igbt_time_value(out, device.rising_i);
+    write_igbt_time_value(out, device.falling_v);
+    write_igbt_time_value(out, device.falling_i);
+    write_igbt_time_value(out, device.rising_v);
+}
+
+bool read_igbt_device_input(std::istream& in, IgbtGpuDeviceInput& device) {
+    return read_igbt_time_value(in, device.fundamental_i) &&
+           read_igbt_time_value(in, device.rising_i) &&
+           read_igbt_time_value(in, device.falling_v) &&
+           read_igbt_time_value(in, device.falling_i) &&
+           read_igbt_time_value(in, device.rising_v);
+}
 
 struct CliOptions {
     std::string topology;  // "2l2s", "2l1s", "3l2s", "3l1s"
@@ -50,11 +224,49 @@ struct CliOptions {
     double static_voltage = 500.0;
     double static_power = 300.0;
     double static_irradiance = 1000.0;
-    int static_cases = 1;
+    int static_cases = kStaticCasesPerYear5Min;
     int num_rounds = 1;
+    int max_iterations = 0;  // 0 means run until degradation reaches 1.0
+    std::string post_processing_mode = "reference";  // fast, reference, or hybrid
+    double thermal_step_s = 0.0;  // 0 means use switching timestep
+    ComputePrecision precision = ComputePrecision::Double;
+    bool pipeline_enabled = true;
+    int batch_size_limit = 0;  // 0 means use calculated GPU capacity
+    std::string validation_output_dir;
+    std::string validation_waveform_cases = "0";
+    bool validation_waveform_cases_set = false;
+    bool export_wall_time = false;
+    bool export_lifetime = false;
+    bool verbose = false;
+    std::string report_output_dir = "results/summary";
+    bool report_output_dir_set = false;
     ModulationType modulation = ModulationType::SVM;
     int num_gpus = -1;  // -1 means use all available GPUs
 };
+
+std::string precision_to_string(ComputePrecision precision) {
+    return precision == ComputePrecision::Float ? "float" : "double";
+}
+
+ComputePrecision parse_precision(const std::string& name) {
+    if (name == "double" || name == "DOUBLE") {
+        return ComputePrecision::Double;
+    }
+    if (name == "float" || name == "single" || name == "FLOAT" || name == "SINGLE") {
+        return ComputePrecision::Float;
+    }
+    throw std::invalid_argument("--precision must be double or float");
+}
+
+bool parse_on_off(const std::string& value, const std::string& option_name) {
+    if (value == "on" || value == "ON" || value == "true" || value == "TRUE" || value == "1") {
+        return true;
+    }
+    if (value == "off" || value == "OFF" || value == "false" || value == "FALSE" || value == "0") {
+        return false;
+    }
+    throw std::invalid_argument(option_name + " must be on/off, true/false, or 1/0");
+}
 
 void print_usage(const char* program) {
     std::cout << "Usage: " << program << " --topology <2l2s|2l1s|3l2s|3l1s> [OPTIONS]" << std::endl;
@@ -72,8 +284,25 @@ void print_usage(const char* program) {
     std::cout << "  --static-voltage: Static AC voltage RMS line-to-line in volts (default: 500)" << std::endl;
     std::cout << "  --static-power: Static AC power in watts for thermal model (default: 300)" << std::endl;
     std::cout << "  --static-irradiance: Static solar irradiance in W/m^2 (default: 1000)" << std::endl;
-    std::cout << "  --static-cases: Number of repeated static cases (default: 1)" << std::endl;
-    std::cout << "  --rounds: Number of rounds to process (default: 1)" << std::endl;
+    std::cout << "  --static-cases: Number of repeated 5-minute static cases (default: 105120 = one year)" << std::endl;
+    std::cout << "  --rounds: Number of chunks used to process one mission/static profile (default: 1)" << std::endl;
+    std::cout << "  --max-iterations: Maximum times to repeat the whole mission/static profile before stopping (default: 0, unlimited)" << std::endl;
+    std::cout << "  --post-processing-mode: fast, reference, or hybrid (default: reference)" << std::endl;
+    std::cout << "     fast = fallback loss/thermal + per-case degradation, skips reference thermal/rainflow" << std::endl;
+    std::cout << "     reference = detailed reference thermal and cycle models" << std::endl;
+    std::cout << "     hybrid = currently aliases reference; reserved for sampled calibration" << std::endl;
+    std::cout << "  --thermal-step: Reference IGBT thermal integration step in seconds (default: 0 = switching timestep)" << std::endl;
+    std::cout << "  --precision: double or float for electrical waveform output precision (default: double)" << std::endl;
+    std::cout << "  --pipeline: on/off, overlap next electrical GPU batch with current CPU post-processing (default: on)" << std::endl;
+    std::cout << "  --batch-size-limit: Optional maximum cases per electrical batch (default: 0 = auto)" << std::endl;
+    std::cout << "  --validation-output-dir: Enable model-validation intermediate CSV export to this directory" << std::endl;
+    std::cout << "  --validation-waveform-cases: A2S waveform cases: none, all, or comma-separated zero-based indices (default: 0)" << std::endl;
+    std::cout << "  --wall-time: Export wall_time.json (elapsed wall clock, not summed worker time)" << std::endl;
+    std::cout << "  --lifetime: Export lifetime.csv and lifetime.json with damage-rate projections and failure status" << std::endl;
+    std::cout << "  --output-dir: Directory for the selected wall-time/lifetime reports (default: results/summary)" << std::endl;
+    std::cout << "  --verbose: Enable detailed diagnostic/profiling console output (default: concise)" << std::endl;
+    std::cout << "     Report flags may be combined; existing stressor/thermal/validation outputs are unchanged." << std::endl;
+    std::cout << "     Lifetime projections use processed 5-minute intervals, not one year per iteration." << std::endl;
     std::cout << "  --modulation: Modulation type svm or spwm (default: svm)" << std::endl;
     std::cout << "  --ngpus: Number of GPUs to use, or 'all' to use all available (default: use all available)" << std::endl;
     std::cout << "  --model: Simulation model JSON file with component part numbers (default: simulator_inputs/simulation_model/example_simulation_model.json)" << std::endl;
@@ -93,6 +322,53 @@ CliOptions parse_arguments(int argc, char** argv) {
             if (opts.num_rounds <= 0) {
                 throw std::invalid_argument("--rounds must be greater than 0");
             }
+        } else if (arg == "--max-iterations" && (i + 1) < argc) {
+            opts.max_iterations = std::stoi(argv[++i]);
+            if (opts.max_iterations < 0) {
+                throw std::invalid_argument("--max-iterations must be greater than or equal to 0");
+            }
+        } else if (arg == "--post-processing-mode" && (i + 1) < argc) {
+            opts.post_processing_mode = argv[++i];
+            if (opts.post_processing_mode != "fast" &&
+                opts.post_processing_mode != "reference" &&
+                opts.post_processing_mode != "hybrid") {
+                throw std::invalid_argument("--post-processing-mode must be fast, reference, or hybrid");
+            }
+        } else if (arg == "--thermal-step" && (i + 1) < argc) {
+            opts.thermal_step_s = std::stod(argv[++i]);
+            if (opts.thermal_step_s < 0.0) {
+                throw std::invalid_argument("--thermal-step must be greater than or equal to 0");
+            }
+        } else if (arg == "--precision" && (i + 1) < argc) {
+            opts.precision = parse_precision(argv[++i]);
+        } else if (arg == "--pipeline" && (i + 1) < argc) {
+            opts.pipeline_enabled = parse_on_off(argv[++i], "--pipeline");
+        } else if (arg == "--batch-size-limit" && (i + 1) < argc) {
+            opts.batch_size_limit = std::stoi(argv[++i]);
+            if (opts.batch_size_limit < 0) {
+                throw std::invalid_argument("--batch-size-limit must be greater than or equal to 0");
+            }
+        } else if (arg == "--validation-output-dir" && (i + 1) < argc) {
+            opts.validation_output_dir = argv[++i];
+            if (opts.validation_output_dir.empty()) {
+                throw std::invalid_argument("--validation-output-dir must not be empty");
+            }
+        } else if (arg == "--validation-waveform-cases" && (i + 1) < argc) {
+            opts.validation_waveform_cases = argv[++i];
+            opts.validation_waveform_cases_set = true;
+        } else if (arg == "--wall-time") {
+            opts.export_wall_time = true;
+        } else if (arg == "--lifetime") {
+            opts.export_lifetime = true;
+        } else if (arg == "--verbose") {
+            opts.verbose = true;
+        } else if (arg == "--output-dir") {
+            if (i + 1 >= argc || std::string(argv[i + 1]).empty() ||
+                std::string(argv[i + 1]).rfind("--", 0) == 0) {
+                throw std::invalid_argument("--output-dir requires a non-empty directory path");
+            }
+            opts.report_output_dir = argv[++i];
+            opts.report_output_dir_set = true;
         } else if ((arg == "--modulation" || arg == "-m") && (i + 1) < argc) {
             opts.modulation = parse_modulation(argv[++i]);
         } else if ((arg == "--ngpus" || arg == "-g") && (i + 1) < argc) {
@@ -163,6 +439,13 @@ CliOptions parse_arguments(int argc, char** argv) {
         opts.topology != "3l2s" && opts.topology != "3l1s") {
         throw std::invalid_argument("--topology must be one of: 2l2s, 2l1s, 3l2s, 3l1s");
     }
+    if (opts.validation_waveform_cases_set && opts.validation_output_dir.empty()) {
+        throw std::invalid_argument(
+            "--validation-waveform-cases requires --validation-output-dir");
+    }
+    if (opts.report_output_dir_set && !opts.export_wall_time && !opts.export_lifetime) {
+        throw std::invalid_argument("--output-dir requires --wall-time and/or --lifetime");
+    }
 
     return opts;
 }
@@ -200,6 +483,12 @@ int main(int argc, char** argv) {
         
         // Parse command line arguments
         const auto options = parse_arguments(argc, argv);
+        tracepv::reporting::ConsoleOutput console(options.verbose);
+        std::ostream& summary = console.summary();
+        if (options.export_wall_time || options.export_lifetime) {
+            // Validate/create only the explicitly selected report destination.
+            std::filesystem::create_directories(options.report_output_dir);
+        }
         
         // ====================================================================
         // Section 1: Load Simulation Model (Component Part Numbers)
@@ -217,7 +506,17 @@ int main(int argc, char** argv) {
             std::cout << "  PCB: " << sim_model.pcb_part_number << std::endl;
             std::cout << "  PV Panel: " << sim_model.pv_panel_part_number << std::endl;
         }
-        
+        if (!options.verbose) {
+            summary << "Component Configuration:\n"
+                    << "  Capacitor: " << sim_model.capacitor_part_number << '\n'
+                    << "  Power Module: " << sim_model.power_module_part_number << '\n'
+                    << "  Fan Cooling: " << sim_model.fan_cooling_part_number << '\n'
+                    << "  PCB: " << sim_model.pcb_part_number << '\n'
+                    << "  PV Panel: " << sim_model.pv_panel_part_number << '\n'
+                    << "  Topology: " << options.topology << '\n'
+                    << "  Modulation: " << modulation_to_string(options.modulation) << std::endl;
+        }
+
         // ====================================================================
         // Section 2: Initialize Component Database and Load Parameters
         // ====================================================================
@@ -262,19 +561,19 @@ int main(int argc, char** argv) {
             if (component_db.load_power_module(sim_model.power_module_part_number, pm_coeffs)) {
                 std::cout << "  ✓ Power Module " << sim_model.power_module_part_number 
                           << " loaded" << std::endl;
-                std::cerr << "DEBUG: IGBT Power Module Coefficients:" << std::endl;
-                std::cerr << "  DeltaT Model:" << std::endl;
-                std::cerr << "    A: " << pm_coeffs.deltaT_model.A << std::endl;
-                std::cerr << "    n: " << pm_coeffs.deltaT_model.n << std::endl;
-                std::cerr << "    Ea: " << pm_coeffs.deltaT_model.Ea << " eV" << std::endl;
-                std::cerr << "  Arrhenius Model:" << std::endl;
-                std::cerr << "    A: " << pm_coeffs.arrhenius_model.A << std::endl;
-                std::cerr << "    n1: " << pm_coeffs.arrhenius_model.n1 << std::endl;
-                std::cerr << "    n2: " << pm_coeffs.arrhenius_model.n2 << std::endl;
-                std::cerr << "    Ea: " << pm_coeffs.arrhenius_model.Ea << " eV" << std::endl;
-                std::cerr << "    RH_ref: " << pm_coeffs.arrhenius_model.RH_ref << " %" << std::endl;
-                std::cerr << "    T_ref: " << pm_coeffs.arrhenius_model.T_ref << " K" << std::endl;
-                std::cerr << "    V_ref: " << pm_coeffs.arrhenius_model.V_ref << " V" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: IGBT Power Module Coefficients:" << std::endl;
+                tracepv::reporting::debug_output() << "  DeltaT Model:" << std::endl;
+                tracepv::reporting::debug_output() << "    A: " << pm_coeffs.deltaT_model.A << std::endl;
+                tracepv::reporting::debug_output() << "    n: " << pm_coeffs.deltaT_model.n << std::endl;
+                tracepv::reporting::debug_output() << "    Ea: " << pm_coeffs.deltaT_model.Ea << " eV" << std::endl;
+                tracepv::reporting::debug_output() << "  Arrhenius Model:" << std::endl;
+                tracepv::reporting::debug_output() << "    A: " << pm_coeffs.arrhenius_model.A << std::endl;
+                tracepv::reporting::debug_output() << "    n1: " << pm_coeffs.arrhenius_model.n1 << std::endl;
+                tracepv::reporting::debug_output() << "    n2: " << pm_coeffs.arrhenius_model.n2 << std::endl;
+                tracepv::reporting::debug_output() << "    Ea: " << pm_coeffs.arrhenius_model.Ea << " eV" << std::endl;
+                tracepv::reporting::debug_output() << "    RH_ref: " << pm_coeffs.arrhenius_model.RH_ref << " %" << std::endl;
+                tracepv::reporting::debug_output() << "    T_ref: " << pm_coeffs.arrhenius_model.T_ref << " K" << std::endl;
+                tracepv::reporting::debug_output() << "    V_ref: " << pm_coeffs.arrhenius_model.V_ref << " V" << std::endl;
             } else {
                 std::cerr << "  ✗ Warning: Power Module " << sim_model.power_module_part_number 
                           << " not found in database" << std::endl;
@@ -302,26 +601,6 @@ int main(int argc, char** argv) {
                           << " not found in database" << std::endl;
             }
         }
-        
-        // ====================================================================
-        // Section 3: Initialize IV Curve Simulator for PV Panel
-        // ====================================================================
-        // IVCurveSimulator converted to Python - commented out for now
-        // TODO: Create C++ wrapper or integrate Python version
-        // std::unique_ptr<IVCurveSimulator> iv_simulator = nullptr;
-        
-        // if (!sim_model.pv_panel_part_number.empty()) {
-        //     iv_simulator = std::make_unique<IVCurveSimulator>();
-        //     if (iv_simulator->initialize(db_path, sim_model.pv_panel_part_number)) {
-        //         std::cout << "\nIV Curve Simulator initialized for PV panel: " 
-        //                   << sim_model.pv_panel_part_number << std::endl;
-        //     } else {
-        //         std::cerr << "Warning: Failed to initialize IV curve simulator for panel: " 
-        //                   << sim_model.pv_panel_part_number << std::endl;
-        //         iv_simulator.reset();
-        //     }
-        // }
-        // ====================================================================
         
         std::vector<SimulationCase> all_cases;
         std::string input_description;
@@ -364,63 +643,19 @@ int main(int argc, char** argv) {
         // ====================================================================
         // Section 4: Pre-load IV Curve Data for Mission Profile
         // ====================================================================
-        // IVCurveData structure is defined above in namespace
+        IVDatabase iv_database(sim_model.iv_database_path, sim_model.pv_panel_part_number);
         std::vector<IVCurveData> iv_curve_data;
         iv_curve_data.reserve(all_cases.size());
-        
-        // IVCurveSimulator converted to Python - commented out for now
-        // TODO: Create C++ wrapper or integrate Python version
-        // if (iv_simulator) {
-        //     std::cout << "\nPre-loading IV curve data for mission profile..." << std::endl;
-        //     int loaded_count = 0;
-        //     
-        //     for (size_t i = 0; i < all_cases.size(); ++i) {
-        //         const auto& sim_case = all_cases[i];
-        //         IVCurveData iv_data;
-        //         iv_data.valid = false;
-        //         
-        //         // Get Voc and Isc for this mission profile point
-        //         if (iv_simulator->get_voc_isc(
-        //             sim_case.solar_irradiance, 
-        //             sim_case.ambient_temperature, 
-        //             iv_data.voc, 
-        //             iv_data.isc)) {
-        //             
-        //             // Calculate operating voltage (e.g., MPP at ~0.8*Voc, or use DC-link voltage)
-        //             // For now, use a simple MPP approximation: V_MPP ≈ 0.8 * Voc
-        //             iv_data.pv_voltage = iv_data.voc * 0.8;
-        //             
-        //             // Get current at operating voltage
-        //             iv_data.pv_current = iv_simulator->get_current(
-        //                 sim_case.solar_irradiance,
-        //                 sim_case.ambient_temperature,
-        //                 iv_data.pv_voltage
-        //             );
-        //             
-        //             if (iv_data.pv_current > 0) {
-        //                 iv_data.valid = true;
-        //                 loaded_count++;
-        //             }
-        //         }
-        //         
-        //         iv_curve_data.push_back(iv_data);
-        //         
-        //         // Progress indicator
-        //         if ((i + 1) % 10000 == 0 || (i + 1) == all_cases.size()) {
-        //             std::cout << "  Processed " << (i + 1) << "/" << all_cases.size() 
-        //                       << " mission profile points..." << std::endl;
-        //         }
-        //     }
-        //     
-        //     std::cout << "  Successfully loaded IV curve data for " << loaded_count 
-        //               << "/" << all_cases.size() << " cases" << std::endl;
-        // } else {
-            // No IV simulator - fill with invalid data (default constructor sets all to 0/false)
-            iv_curve_data.resize(all_cases.size(), IVCurveData());
-            std::cout << "\nWarning: No IV curve simulator available. Using simple PV voltage model." << std::endl;
-        // }
-        // ====================================================================
-        
+        for (const auto& sc : all_cases) {
+            iv_curve_data.push_back(iv_database.lookup(sc.solar_irradiance,
+                sc.ambient_temperature, sim_model.pv_modules_per_string,
+                sim_model.pv_parallel_strings));
+        }
+        std::cout << "TRACEPV_IV loaded=" << iv_curve_data.size()
+                  << " database=" << sim_model.iv_database_path
+                  << " series=" << sim_model.pv_modules_per_string
+                  << " parallel=" << sim_model.pv_parallel_strings << std::endl;
+
         // Create base simulation parameters from database
         // Database is required for all inverter and grid parameters
         SimulationParameters base_params;
@@ -517,7 +752,14 @@ int main(int argc, char** argv) {
         std::cout << "  Total Memory: " << std::fixed << std::setprecision(2)
                   << (agg_capacity.total_memory / (1024.0 * 1024.0 * 1024.0)) << " GB" << std::endl;
         
-        // Set OpenMP to use as many threads as GPUs
+        // The outer OpenMP region assigns one worker to each GPU. Reference
+        // thermal post-processing uses an inner OpenMP team, so nested
+        // parallelism must be enabled by the initial task before the GPU
+        // workers are created. Otherwise a multi-GPU outer team serializes the
+        // inner thermal loops, while the single-GPU (one-thread outer team)
+        // path still runs them in parallel.
+        omp_set_dynamic(0);
+        omp_set_max_active_levels(2);
         omp_set_num_threads(num_gpus);
         
         // Calculate fundamental cycle size and batch size
@@ -544,7 +786,11 @@ int main(int argc, char** argv) {
             batch_size_memory += batch_size_per_gpu;
         }
         
-        int batch_size = std::min(batch_size_threads, batch_size_memory);
+        int batch_size_auto = std::min(batch_size_threads, batch_size_memory);
+        int batch_size = batch_size_auto;
+        if (options.batch_size_limit > 0) {
+            batch_size = std::min(batch_size, options.batch_size_limit);
+        }
         
         // Ensure batch_size is at least 1
         batch_size = std::max(1, batch_size);
@@ -590,12 +836,272 @@ int main(int argc, char** argv) {
             first = false;
         }
         std::cout << " = " << batch_size_memory << " cases)" << std::endl;
+        std::cout << "  Batch Size Limit: "
+                  << (options.batch_size_limit > 0 ? std::to_string(options.batch_size_limit) : std::string("auto"))
+                  << std::endl;
+        std::cout << "  Auto Batch Size: " << batch_size_auto << " cases per batch" << std::endl;
         std::cout << "  Final Batch Size: " << batch_size << " cases per batch" << std::endl;
         
         int total_cases = static_cast<int>(all_cases.size());
-        int cases_per_round = total_cases / options.num_rounds;
-        if (cases_per_round == 0) {
-            cases_per_round = total_cases;
+        // Persist the per-case thermal response for validation against field sensors.
+        // Each OpenMP worker owns disjoint case indices, so these vectors are safely
+        // populated in parallel and written after the round completes.
+        std::vector<double> validation_capacitor_hotspot(total_cases, 0.0);
+        std::vector<double> validation_capacitor_surface(total_cases, 0.0);
+        std::vector<double> validation_internal_temperature(total_cases, 0.0);
+        std::vector<double> validation_capacitor_loss(total_cases, 0.0);
+        std::vector<double> validation_ac_power(total_cases, 0.0);
+        std::vector<double> validation_igbt_junction(total_cases, 0.0);
+        std::vector<int> validation_reference_model_used(total_cases, 0);
+        std::vector<unsigned char> validation_case_processed(total_cases, 0);
+
+        const bool model_validation_enabled = !options.validation_output_dir.empty();
+        const std::filesystem::path model_validation_dir = options.validation_output_dir;
+        std::optional<WaveformCaseSelector> validation_waveform_selector;
+        std::vector<ModelValidationRecord> model_validation_records;
+        std::vector<unsigned char> validation_waveform_written;
+        if (model_validation_enabled) {
+            validation_waveform_selector.emplace(WaveformCaseSelector::parse(
+                options.validation_waveform_cases,
+                static_cast<std::size_t>(total_cases)));
+            model_validation_records.resize(static_cast<std::size_t>(total_cases));
+            validation_waveform_written.assign(static_cast<std::size_t>(total_cases), 0);
+            for (int case_idx = 0; case_idx < total_cases; ++case_idx) {
+                model_validation_records[static_cast<std::size_t>(case_idx)].case_index =
+                    static_cast<std::size_t>(case_idx);
+            }
+            std::filesystem::create_directories(model_validation_dir / "a2s_core");
+            std::cout << "Model-validation intermediate export enabled: "
+                      << model_validation_dir << std::endl;
+            std::cout << "  A2S waveform cases: "
+                      << options.validation_waveform_cases << std::endl;
+        }
+        if (options.num_rounds > total_cases) {
+            throw std::runtime_error("Number of rounds cannot exceed the number of simulation cases.");
+        }
+
+        // Default to equal sequential case groups (used by static inputs and
+        // timestamp formats that cannot be parsed).
+        std::vector<int> round_case_boundaries(
+            static_cast<std::size_t>(options.num_rounds + 1), 0);
+        for (int boundary = 0; boundary <= options.num_rounds; ++boundary) {
+            round_case_boundaries[static_cast<std::size_t>(boundary)] =
+                static_cast<int>((static_cast<long long>(total_cases) * boundary) /
+                                 options.num_rounds);
+        }
+
+        // A mission-profile round represents a fraction of the calendar year,
+        // not merely a fraction of the daylight-filtered case count.  Thus six
+        // rounds are Jan-Feb, Mar-Apr, ..., Nov-Dec even when the seasons have
+        // different numbers of retained simulation cases.
+        bool calendar_round_boundaries = options.input_mode == "mission";
+        std::vector<double> calendar_coordinates;
+        calendar_coordinates.reserve(all_cases.size());
+        double previous_coordinate = -std::numeric_limits<double>::infinity();
+        for (const SimulationCase& simulation_case : all_cases) {
+            double coordinate = 0.0;
+            if (!parse_calendar_month_coordinate(simulation_case.time, coordinate) ||
+                coordinate < previous_coordinate) {
+                calendar_round_boundaries = false;
+                break;
+            }
+            calendar_coordinates.push_back(coordinate);
+            previous_coordinate = coordinate;
+        }
+        if (calendar_round_boundaries && !calendar_coordinates.empty()) {
+            const double calendar_year_start =
+                std::floor(calendar_coordinates.front() / 12.0) * 12.0;
+            for (int boundary = 1; boundary < options.num_rounds; ++boundary) {
+                const double target = calendar_year_start +
+                    12.0 * static_cast<double>(boundary) /
+                        static_cast<double>(options.num_rounds);
+                const auto it = std::lower_bound(
+                    calendar_coordinates.begin(), calendar_coordinates.end(), target);
+                round_case_boundaries[static_cast<std::size_t>(boundary)] =
+                    static_cast<int>(it - calendar_coordinates.begin());
+            }
+            for (int boundary = 1; boundary <= options.num_rounds; ++boundary) {
+                if (round_case_boundaries[static_cast<std::size_t>(boundary)] <=
+                    round_case_boundaries[static_cast<std::size_t>(boundary - 1)]) {
+                    calendar_round_boundaries = false;
+                    break;
+                }
+            }
+        }
+        if (!calendar_round_boundaries) {
+            for (int boundary = 0; boundary <= options.num_rounds; ++boundary) {
+                round_case_boundaries[static_cast<std::size_t>(boundary)] =
+                    static_cast<int>((static_cast<long long>(total_cases) * boundary) /
+                                     options.num_rounds);
+            }
+        }
+
+        // The environmental model needs the complete chronological load history.
+        // Calculate missing power first, retaining only scalars, not year-long waveforms.
+        // Keep mission inputs unchanged so calculated power is never labelled measured.
+        std::vector<double> calculated_environmental_power(all_cases.size(), 0.0);
+        if (cudaSetDevice(0) != cudaSuccess)
+            throw std::runtime_error("Cannot select GPU for electrical power prepass");
+        std::cout << "TRACEPV_POWER_PREPASS total=" << all_cases.size() << std::endl;
+        for (std::size_t i = 0; i < all_cases.size(); ++i) {
+            if (all_cases[i].has_ac_power) continue;
+            SimulationParameters parameters = base_params;
+            update_params_for_case(parameters, all_cases[i], iv_curve_data[i]);
+            const auto outputs = run_unified_gpu_batch(
+                std::vector<SimulationParameters>{parameters}, options.precision);
+            if (outputs.outputs.size() != 1)
+                throw std::runtime_error("Electrical power prepass failed at " + all_cases[i].time);
+            const auto power = calculate_ac_power(outputs.outputs.front(), parameters);
+            const double watts = calculate_equivalent_ac_power(power.p_AC_instantaneous);
+            if (power.p_AC_instantaneous.empty() || !std::isfinite(watts))
+                throw std::runtime_error("Invalid calculated AC power at " + all_cases[i].time);
+            calculated_environmental_power[i] = watts;
+            if ((i+1)%100 == 0 || i+1 == all_cases.size())
+                std::cout << "TRACEPV_POWER_PREPASS processed=" << i+1
+                          << " total=" << all_cases.size() << std::endl;
+        }
+
+        std::vector<double> all_ambient_temps;
+        std::vector<double> all_ambient_rhs;
+        std::vector<double> all_environmental_loads;
+        all_ambient_temps.reserve(all_cases.size());
+        all_ambient_rhs.reserve(all_cases.size());
+        all_environmental_loads.reserve(all_cases.size());
+
+        bool has_any_ac_power = false;
+        std::size_t environmental_case_index = 0;
+        double max_environmental_load = 0.0;
+        for (const SimulationCase& sc : all_cases) {
+            all_ambient_temps.push_back(sc.ambient_temperature);
+            all_ambient_rhs.push_back(sc.rh);
+
+            const double load_value = std::max(0.0, sc.has_ac_power ? sc.ac_power :
+                calculated_environmental_power[environmental_case_index]);
+            ++environmental_case_index;
+            has_any_ac_power = true;
+            all_environmental_loads.push_back(load_value);
+            if (std::isfinite(load_value) && load_value > max_environmental_load) {
+                max_environmental_load = load_value;
+            }
+        }
+
+        // The DDM environmental model uses load ratio. For power-driven static
+        // cases, keep the DDM notebook's 10 kW reference floor so a single
+        // low-power case is not normalized to full load.
+        const double rated_environmental_load = std::max(max_environmental_load, 10000.0);
+
+        std::vector<double> all_internal_temps;
+        std::vector<double> all_internal_rhs;
+        const bool has_provided_internal_temperature = std::any_of(
+            all_cases.begin(),
+            all_cases.end(),
+            [](const SimulationCase& simulation_case) {
+                return simulation_case.has_internal_temperature &&
+                       std::isfinite(simulation_case.internal_temperature);
+            });
+        std::vector<double> all_internal_dew_points;
+        calculate_internal_conditions_ddm(
+            all_ambient_temps,
+            all_ambient_rhs,
+            all_environmental_loads,
+            rated_environmental_load,
+            all_internal_temps,
+            all_internal_rhs,
+            has_provided_internal_temperature ? &all_internal_dew_points : nullptr
+        );
+        if (all_internal_temps.size() != all_cases.size() ||
+            all_internal_rhs.size() != all_cases.size() ||
+            (has_provided_internal_temperature &&
+             all_internal_dew_points.size() != all_cases.size())) {
+            throw std::runtime_error("DDM environmental model failed to generate internal conditions.");
+        }
+        // Keep the model prediction separate from the boundary actually used by
+        // downstream thermal/reliability models. A combined mission CSV may
+        // provide measured internal temperature, which overrides only the used
+        // boundary and must not erase the prediction needed for validation.
+        std::vector<double> predicted_internal_temps;
+        std::vector<double> predicted_internal_rhs;
+        std::vector<std::string> internal_temperature_sources;
+        std::vector<std::string> internal_relative_humidity_sources;
+        if (model_validation_enabled) {
+            predicted_internal_temps = all_internal_temps;
+            predicted_internal_rhs = all_internal_rhs;
+            internal_temperature_sources.assign(all_cases.size(), "predicted");
+            internal_relative_humidity_sources.assign(all_cases.size(), "predicted");
+        }
+        std::size_t provided_internal_temperature_cases = 0;
+        for (std::size_t i = 0; i < all_cases.size(); ++i) {
+            if (all_cases[i].has_internal_temperature &&
+                std::isfinite(all_cases[i].internal_temperature)) {
+                all_internal_temps[i] = all_cases[i].internal_temperature;
+                all_internal_rhs[i] =
+                    calculate_relative_humidity_from_temperature_dew_point(
+                        all_internal_temps[i],
+                        all_internal_dew_points[i]);
+                if (!std::isfinite(all_internal_rhs[i])) {
+                    throw std::runtime_error(
+                        "Cannot recompute internal RH for provided internal temperature at case " +
+                        std::to_string(i));
+                }
+                if (model_validation_enabled) {
+                    internal_temperature_sources[i] = "provided";
+                    internal_relative_humidity_sources[i] =
+                        "recomputed_from_internal_dew_point";
+                }
+                ++provided_internal_temperature_cases;
+            }
+        }
+
+        if (model_validation_enabled) {
+            for (std::size_t i = 0; i < all_cases.size(); ++i) {
+                ModelValidationRecord& record = model_validation_records[i];
+                record.ambient_temperature_c = all_cases[i].ambient_temperature;
+                record.ambient_temperature_available =
+                    std::isfinite(record.ambient_temperature_c);
+                record.ambient_relative_humidity_percent = all_cases[i].rh;
+                record.ambient_relative_humidity_available =
+                    std::isfinite(record.ambient_relative_humidity_percent);
+
+                record.internal_temperature_predicted_c = predicted_internal_temps[i];
+                record.internal_temperature_predicted_available =
+                    std::isfinite(record.internal_temperature_predicted_c);
+                record.internal_temperature_used_c = all_internal_temps[i];
+                record.internal_temperature_used_available =
+                    std::isfinite(record.internal_temperature_used_c);
+                record.internal_temperature_source = internal_temperature_sources[i];
+
+                record.internal_relative_humidity_predicted_percent =
+                    predicted_internal_rhs[i];
+                record.internal_relative_humidity_predicted_available =
+                    std::isfinite(record.internal_relative_humidity_predicted_percent);
+                record.internal_relative_humidity_used_percent = all_internal_rhs[i];
+                record.internal_relative_humidity_used_available =
+                    std::isfinite(record.internal_relative_humidity_used_percent);
+                record.internal_relative_humidity_source =
+                    internal_relative_humidity_sources[i];
+            }
+        }
+
+        if (!all_cases.empty()) {
+            auto temp_minmax = std::minmax_element(all_internal_temps.begin(), all_internal_temps.end());
+            auto rh_minmax = std::minmax_element(all_internal_rhs.begin(), all_internal_rhs.end());
+            std::cout << "\nEnvironmental Simulation Model:" << std::endl;
+            std::cout << "  Model: DDM physics-informed internal temperature/RH model" << std::endl;
+            std::cout << "  Load input: "
+                      << (has_any_ac_power ? "AC power (positive = exported to grid)"
+                                           : "zero (AC power unavailable; GHI fallback disabled)")
+                      << std::endl;
+            std::cout << "  Internal temperature boundary: "
+                      << (provided_internal_temperature_cases > 0
+                              ? "provided mission-profile values override the environmental model"
+                              : "environmental-model prediction")
+                      << " (provided " << provided_internal_temperature_cases << "/"
+                      << all_cases.size() << " cases)" << std::endl;
+            std::cout << "  Rated load for normalization: " << rated_environmental_load << std::endl;
+            std::cout << "  Internal temp range: [" << *temp_minmax.first << ", "
+                      << *temp_minmax.second << "] C" << std::endl;
+            std::cout << "  Internal RH range: [" << *rh_minmax.first << ", "
+                      << *rh_minmax.second << "] %" << std::endl;
         }
         
         // Calculate threads per simulation case
@@ -612,8 +1118,20 @@ int main(int argc, char** argv) {
         std::cout << "  Topology: " << topology_level 
                   << "-level " << model_stage << "-stage" << std::endl;
         std::cout << "  Modulation: " << modulation_to_string(options.modulation) << std::endl;
+        std::cout << "  Post-processing mode: " << options.post_processing_mode << std::endl;
+        std::cout << "  Thermal step: " << options.thermal_step_s << " s" << std::endl;
+        std::cout << "  Precision: " << precision_to_string(options.precision) << std::endl;
+        std::cout << "  Pipeline: " << (options.pipeline_enabled ? "on" : "off") << std::endl;
         std::cout << "  Total Cases: " << total_cases << std::endl;
-        std::cout << "  Rounds: " << options.num_rounds << std::endl;
+        std::cout << "  Batches per year (rounds): " << options.num_rounds << std::endl;
+        std::cout << "  Nominal duration per batch: "
+                  << (12.0 / static_cast<double>(options.num_rounds))
+                  << " months" << std::endl;
+        std::cout << "  Batch boundaries: "
+                  << (calendar_round_boundaries
+                          ? "calendar timestamps"
+                          : "equal sequential case groups")
+                  << std::endl;
         std::cout << std::endl;
         
         // Create output directories
@@ -645,21 +1163,153 @@ int main(int argc, char** argv) {
         // Global timing accumulators (across all iterations)
         double total_simulation_time = 0.0;
         std::vector<double> gpu_simulation_times(num_gpus, 0.0); // Track time per GPU
+        ProfilingTotals profiling_totals;
+        tracepv::reporting::RunReport run_report;
         
         int mission_profile_iteration = 0;
         bool degradation_reached = false;
         std::string failed_component = "";
         
-        // Storage for electrical simulation results from first iteration
-        // Used to skip electrical simulation in subsequent iterations (when iteration <= 10)
+        // Storage for electrical simulation results from first iteration.
+        // Electrical waveforms are reused across all subsequent mission-profile repeats.
         struct StoredElectricalResults {
             double I_cap_rms;
             std::vector<double> V_ce;
             std::vector<double> I_c;
+            std::vector<double> I_cap;
+            std::vector<double> time_points;
+            double average_model_duty_d = 0.0;
+            double average_model_duty_q = 0.0;
+            std::vector<double> average_model_dq_states;
             double ac_power;
+            std::array<IgbtGpuDeviceInput, 4> igbt_devices;
+            double igbt_tavg = 0.0;
+            double igbt_tsim = 0.0;
+            bool has_capacitor_reference_inputs = false;
+            bool has_igbt_reference_inputs = false;
+            bool cache_on_disk = false;
+            std::filesystem::path cache_file;
         };
         std::vector<StoredElectricalResults> stored_electrical_results(total_cases);
+        const std::filesystem::path electrical_reference_cache_dir =
+            output_dir / "electrical_reference_cache";
+        std::filesystem::create_directories(electrical_reference_cache_dir);
+
+        auto release_stored_reference_payload = [](StoredElectricalResults& stored) {
+            clear_vector_storage(stored.V_ce);
+            clear_vector_storage(stored.I_c);
+            clear_vector_storage(stored.I_cap);
+            clear_vector_storage(stored.time_points);
+            for (auto& device : stored.igbt_devices) {
+                clear_vector_storage(device.fundamental_i.t);
+                clear_vector_storage(device.fundamental_i.y);
+                clear_vector_storage(device.rising_i.t);
+                clear_vector_storage(device.rising_i.y);
+                clear_vector_storage(device.falling_v.t);
+                clear_vector_storage(device.falling_v.y);
+                clear_vector_storage(device.falling_i.t);
+                clear_vector_storage(device.falling_i.y);
+                clear_vector_storage(device.rising_v.t);
+                clear_vector_storage(device.rising_v.y);
+            }
+            // The flags describe the payload currently present in this object,
+            // not whether it was available before the memory-saving release.
+            // Leaving them true would feed empty device signals to the cached
+            // reference model, which can otherwise look like a valid 0 W loss.
+            stored.has_capacitor_reference_inputs = false;
+            stored.has_igbt_reference_inputs = false;
+        };
+
+        auto write_stored_reference_cache = [&](StoredElectricalResults& stored,
+                                                const std::filesystem::path& path) {
+            // Full mission profiles have tens of thousands of cases. Persisting
+            // waveform/device-level reference cache for every case is larger
+            // than this deployment's RAM or system disk. The active exact cache
+            // is the round-level degradation cache; per-case reference payloads
+            // are treated as batch-local scratch data until a compact harmonic /
+            // device-feature cache replaces this path.
+            stored.cache_file.clear();
+            stored.cache_on_disk = false;
+            return false;
+            std::ofstream out(path, std::ios::binary);
+            if (!out) {
+                std::cerr << "Warning: cannot write electrical reference cache: "
+                          << path << std::endl;
+                return false;
+            }
+            const std::uint32_t magic = 0x54505643; // TPVC
+            const std::uint32_t version = 1;
+            out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+            out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+            out.write(reinterpret_cast<const char*>(&stored.I_cap_rms), sizeof(stored.I_cap_rms));
+            out.write(reinterpret_cast<const char*>(&stored.ac_power), sizeof(stored.ac_power));
+            out.write(reinterpret_cast<const char*>(&stored.igbt_tavg), sizeof(stored.igbt_tavg));
+            out.write(reinterpret_cast<const char*>(&stored.igbt_tsim), sizeof(stored.igbt_tsim));
+            out.write(reinterpret_cast<const char*>(&stored.has_capacitor_reference_inputs),
+                      sizeof(stored.has_capacitor_reference_inputs));
+            out.write(reinterpret_cast<const char*>(&stored.has_igbt_reference_inputs),
+                      sizeof(stored.has_igbt_reference_inputs));
+            write_double_vector(out, stored.time_points);
+            write_double_vector(out, stored.I_cap);
+            for (const auto& device : stored.igbt_devices) {
+                write_igbt_device_input(out, device);
+            }
+            if (!out) {
+                std::cerr << "Warning: incomplete electrical reference cache write: "
+                          << path << std::endl;
+                return false;
+            }
+            stored.cache_file = path;
+            stored.cache_on_disk = true;
+            return true;
+        };
+
+        auto read_stored_reference_cache = [&](StoredElectricalResults& stored) {
+            if (!stored.cache_on_disk || stored.cache_file.empty()) {
+                return true;
+            }
+            std::ifstream in(stored.cache_file, std::ios::binary);
+            if (!in) {
+                std::cerr << "Warning: cannot read electrical reference cache: "
+                          << stored.cache_file << std::endl;
+                return false;
+            }
+            std::uint32_t magic = 0;
+            std::uint32_t version = 0;
+            in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+            in.read(reinterpret_cast<char*>(&version), sizeof(version));
+            if (!in || magic != 0x54505643 || version != 1) {
+                std::cerr << "Warning: invalid electrical reference cache: "
+                          << stored.cache_file << std::endl;
+                return false;
+            }
+            in.read(reinterpret_cast<char*>(&stored.I_cap_rms), sizeof(stored.I_cap_rms));
+            in.read(reinterpret_cast<char*>(&stored.ac_power), sizeof(stored.ac_power));
+            in.read(reinterpret_cast<char*>(&stored.igbt_tavg), sizeof(stored.igbt_tavg));
+            in.read(reinterpret_cast<char*>(&stored.igbt_tsim), sizeof(stored.igbt_tsim));
+            in.read(reinterpret_cast<char*>(&stored.has_capacitor_reference_inputs),
+                    sizeof(stored.has_capacitor_reference_inputs));
+            in.read(reinterpret_cast<char*>(&stored.has_igbt_reference_inputs),
+                    sizeof(stored.has_igbt_reference_inputs));
+            if (!read_double_vector(in, stored.time_points) ||
+                !read_double_vector(in, stored.I_cap)) {
+                return false;
+            }
+            for (auto& device : stored.igbt_devices) {
+                if (!read_igbt_device_input(in, device)) {
+                    return false;
+                }
+            }
+            return static_cast<bool>(in);
+        };
+
         bool electrical_results_stored = false;
+        const bool cache_electrical_results = options.max_iterations != 1;
+        std::vector<RoundComputationCache> round_computation_cache(
+            static_cast<std::size_t>(std::max(1, options.num_rounds)));
+        const bool fast_post_processing = options.post_processing_mode == "fast";
+        const bool reference_post_processing =
+            options.post_processing_mode == "reference" || options.post_processing_mode == "hybrid";
         
         std::cout << "\n========================================" << std::endl;
         std::cout << "Starting Degradation Tracking Simulation" << std::endl;
@@ -667,26 +1317,42 @@ int main(int argc, char** argv) {
         std::cout << "========================================\n" << std::endl;
         
 
-        int threshold = 10;
+        auto release_batch_memory = [](BatchOutputs& batch_outputs,
+                                       std::vector<SimulationParameters>& params_batch) {
+            for (UnifiedOutputs& outputs : batch_outputs.outputs) {
+                std::vector<double>().swap(outputs.states);
+                std::vector<double>().swap(outputs.time_points);
+                std::vector<int>().swap(outputs.switching_states);
+                std::vector<double>().swap(outputs.average_model_dq_states);
+            }
+            std::vector<UnifiedOutputs>().swap(batch_outputs.outputs);
+            std::vector<SimulationParameters>().swap(params_batch);
+#ifdef __linux__
+            malloc_trim(0);
+#endif
+        };
 
-        while (!degradation_reached) {
+        while (!degradation_reached &&
+               (options.max_iterations <= 0 || mission_profile_iteration < options.max_iterations)) {
             mission_profile_iteration++;
             std::cout << "\n" << std::string(60, '=') << std::endl;
             std::cout << "Mission Profile Iteration #" << mission_profile_iteration << std::endl;
             std::cout << std::string(60, '=') << std::endl;
             
-            // Check if electrical simulation can be skipped
-            // Skip if iteration > 1 (we have stored results from first iteration) AND iteration <= 10
+            // Check if electrical simulation can be skipped. Electrical waveforms depend on
+            // mission/static operating conditions, not on accumulated degradation, so the
+            // first iteration is cached and reused. Degradation-driven parameter changes are
+            // handled at the loss/thermal round-cache layer below.
             bool skip_electrical_simulation = false;
-            if (mission_profile_iteration > 1 && mission_profile_iteration <= threshold && electrical_results_stored) {
+            const bool static_electrical_profile = options.input_mode == "static";
+            if (cache_electrical_results &&
+                mission_profile_iteration > 1 && electrical_results_stored) {
                 skip_electrical_simulation = true;
-                std::cout << "Skipping electrical simulation (iteration " << mission_profile_iteration 
-                          << " <= 10, using stored results from first iteration)" << std::endl;
-            } else if (mission_profile_iteration > 1 && mission_profile_iteration <= threshold && !electrical_results_stored) {
+                std::cout << "Skipping electrical simulation (iteration " << mission_profile_iteration
+                          << ", using stored electrical results from first iteration)" << std::endl;
+            } else if (cache_electrical_results &&
+                       mission_profile_iteration > 1 && !electrical_results_stored) {
                 std::cout << "Warning: Cannot skip electrical simulation - results not stored yet. Running simulation." << std::endl;
-            } else if (mission_profile_iteration > threshold) {
-                std::cout << "Running electrical simulation (iteration " << mission_profile_iteration 
-                          << " > " << threshold << ", skipping not allowed)" << std::endl;
             }
             
             // Reset case index for this mission profile iteration
@@ -694,6 +1360,7 @@ int main(int argc, char** argv) {
             double iteration_simulation_time = 0.0;
             std::vector<double> iteration_gpu_simulation_times(num_gpus, 0.0); // Track time per GPU for this iteration
             int total_cases_processed = 0;
+            std::vector<int> round_attempts(static_cast<std::size_t>(options.num_rounds), 0);
             
             // Mission profile iteration-level accumulated stressors (reset each iteration)
             double iteration_fan_stressor_electrical_external = 0.0;
@@ -704,14 +1371,171 @@ int main(int argc, char** argv) {
             double iteration_igbt_stressor_deltaT = 0.0;  // IGBT stressor from deltaT model
             double iteration_igbt_stressor_arrhenius = 0.0;  // IGBT stressor from Arrhenius model
             double iteration_pcb_degradation = 0.0;
+
+            auto current_degradation_values = [&]() {
+                return DegradationValues{
+                    global_fan_stressor_electrical_external + iteration_fan_stressor_electrical_external,
+                    global_fan_stressor_electrical_internal + iteration_fan_stressor_electrical_internal,
+                    global_fan_stressor_mechanical_external + iteration_fan_stressor_mechanical_external,
+                    global_fan_stressor_mechanical_internal + iteration_fan_stressor_mechanical_internal,
+                    global_capacitor_stressor + iteration_capacitor_stressor,
+                    global_igbt_stressor_deltaT + iteration_igbt_stressor_deltaT,
+                    global_igbt_stressor_arrhenius + iteration_igbt_stressor_arrhenius,
+                    global_pcb_degradation + iteration_pcb_degradation};
+            };
+
+            const auto bucket_state_from_values = [](const DegradationValues& values) {
+                const auto bucket = [](double value) {
+                    constexpr double kBucketEpsilon = 1e-12;
+                    const int bucket_index = static_cast<int>(std::floor(
+                        std::max(0.0, value) / kCriticalDegradationStep + kBucketEpsilon));
+                    // Thermal aging parameters are defined only through the
+                    // component failure point (100% degradation).
+                    return std::min(10, bucket_index);
+                };
+                return DegradationParameterState{
+                    bucket(values[0]),
+                    bucket(values[1]),
+                    bucket(values[2]),
+                    bucket(values[3]),
+                    bucket(values[4]),
+                    bucket(values[5]),
+                    bucket(values[6]),
+                    bucket(values[7])};
+            };
+
+            auto current_parameter_state = [&]() {
+                return bucket_state_from_values(current_degradation_values());
+            };
+
+            const auto parameter_state_exceeds = [](const DegradationParameterState& candidate,
+                                                    const DegradationParameterState& accepted) {
+                for (std::size_t i = 0; i < candidate.size(); ++i) {
+                    if (candidate[i] > accepted[i]) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            const auto describe_bucket_crossing = [](const DegradationParameterState& before,
+                                                     const DegradationParameterState& after) {
+                const std::array<const char*, 8> names = {
+                    "Fan Electrical External",
+                    "Fan Electrical Internal",
+                    "Fan Mechanical External",
+                    "Fan Mechanical Internal",
+                    "Capacitor",
+                    "IGBT DeltaT",
+                    "IGBT Arrhenius",
+                    "PCB"
+                };
+                std::ostringstream oss;
+                bool first = true;
+                for (std::size_t i = 0; i < names.size(); ++i) {
+                    if (after[i] != before[i]) {
+                        if (!first) {
+                            oss << ", ";
+                        }
+                        oss << names[i] << " "
+                            << static_cast<int>(std::lround(
+                                   before[i] * kCriticalDegradationStep * 100.0))
+                            << "%->"
+                            << static_cast<int>(std::lround(
+                                   after[i] * kCriticalDegradationStep * 100.0))
+                            << "%";
+                        first = false;
+                    }
+                }
+                return first ? std::string("none") : oss.str();
+            };
             
             const auto iteration_start = std::chrono::steady_clock::now();
+
+            std::optional<StoredElectricalResults> static_electrical_result;
+            double static_electrical_elapsed_s = 0.0;
+            if (static_electrical_profile && !skip_electrical_simulation && !all_cases.empty()) {
+                const auto static_cache_start = std::chrono::steady_clock::now();
+                const SimulationCase& sc = all_cases.front();
+                static const IVCurveData default_iv_data;
+                const IVCurveData& iv_data = !iv_curve_data.empty() ? iv_curve_data.front() : default_iv_data;
+                SimulationParameters static_params = base_params;
+                update_params_for_case(static_params, sc, iv_data);
+                std::vector<SimulationParameters> static_params_batch{static_params};
+                BatchOutputs one_case_outputs =
+                    run_unified_gpu_batch(static_params_batch, options.precision);
+                if (!one_case_outputs.outputs.empty()) {
+                    const UnifiedOutputs& outputs = one_case_outputs.outputs.front();
+                    StressResults stress = calculate_stress(outputs, static_params);
+                    double ac_power = sc.ac_power;
+                    if (!sc.has_ac_power) {
+                        ACPowerResults ac_power_results = calculate_ac_power(outputs, static_params);
+                        ac_power = calculate_equivalent_ac_power(ac_power_results.p_AC_instantaneous);
+                    }
+                    StoredElectricalResults cached{};
+                    cached.I_cap_rms = stress.I_cap_rms;
+                    cached.V_ce = stress.V_ce;
+                    cached.I_c = stress.I_c;
+                    cached.I_cap = stress.I_cap;
+                    cached.time_points = outputs.time_points;
+                    cached.average_model_duty_d = outputs.duty_d;
+                    cached.average_model_duty_q = outputs.duty_q;
+                    cached.average_model_dq_states = outputs.average_model_dq_states;
+                    cached.ac_power = ac_power;
+                    cached.has_capacitor_reference_inputs =
+                        !cached.time_points.empty() && !cached.I_cap.empty();
+                    std::string igbt_cache_message;
+                    cached.has_igbt_reference_inputs = build_igbt_reference_cached_input(
+                        outputs,
+                        static_params,
+                        cached.igbt_devices,
+                        cached.igbt_tavg,
+                        cached.igbt_tsim,
+                        igbt_cache_message);
+                    if (!cached.has_igbt_reference_inputs && !igbt_cache_message.empty()) {
+                        std::cerr << "Warning: static IGBT reference cache unavailable: "
+                                  << igbt_cache_message << std::endl;
+                    }
+                    static_electrical_result = std::move(cached);
+                    if (cache_electrical_results && !stored_electrical_results.empty()) {
+                        stored_electrical_results.front() = *static_electrical_result;
+                        const auto cache_path = electrical_reference_cache_dir /
+                            "case_0.bin";
+                        write_stored_reference_cache(stored_electrical_results.front(), cache_path);
+                        release_stored_reference_payload(stored_electrical_results.front());
+                    }
+                    static_electrical_elapsed_s = one_case_outputs.elapsed_s;
+                    iteration_simulation_time += static_electrical_elapsed_s;
+                    std::cout << "Static electrical stress cached for this iteration." << std::endl;
+                } else {
+                    std::cout << "Warning: static electrical cache unavailable; falling back to batch electrical simulation." << std::endl;
+                }
+                profiling_totals.static_cache_electrical +=
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - static_cache_start).count();
+            }
             
             for (int round = 0; round < options.num_rounds; ++round) {
             const auto round_start = std::chrono::steady_clock::now();
-            
-            int round_cases = (round == options.num_rounds - 1) ? 
-                (total_cases - case_index) : cases_per_round;
+
+            const int round_start_case =
+                round_case_boundaries[static_cast<std::size_t>(round)];
+            const int round_end_case =
+                round_case_boundaries[static_cast<std::size_t>(round + 1)];
+            case_index = round_start_case;
+            const int round_cases = round_end_case - round_start_case;
+            const int round_attempt = ++round_attempts[static_cast<std::size_t>(round)];
+            int cases_reported_in_round = 0;
+
+            std::cout << "Starting Round " << (round + 1) << "/" << options.num_rounds
+                      << ": " << round_cases << " cases" << std::endl;
+            if (calendar_round_boundaries) {
+                std::cout << "  Calendar range: " << all_cases[round_start_case].time
+                          << " to " << all_cases[round_end_case - 1].time << std::endl;
+            }
+            std::cout << "TRACEPV_PROGRESS iteration=" << mission_profile_iteration
+                      << " round=" << (round + 1) << "/" << options.num_rounds
+                      << " pass=" << round_attempt
+                      << " processed=0 total=" << round_cases << std::endl;
             
             // Process batches in this round
             int round_batches = (round_cases + batch_size - 1) / batch_size;
@@ -726,23 +1550,78 @@ int main(int argc, char** argv) {
             double round_igbt_stressor_deltaT = 0.0;  // IGBT stressor from deltaT model
             double round_igbt_stressor_arrhenius = 0.0;  // IGBT stressor from Arrhenius model
             double round_pcb_degradation = 0.0;
-            bool round_terminated_early = false;  // Flag for early termination (shared across threads)
+            std::atomic<bool> round_terminated_early{false};
             
-            // Structure to track per-case stressors for CSV output
-            struct CaseStressorRecord {
-                int case_index;
-                double fan_electrical_external;
-                double fan_electrical_internal;
-                double fan_mechanical_external;
-                double fan_mechanical_internal;
-                double capacitor;
-                double igbt_deltaT;
-                double igbt_arrhenius;
-                double pcb;
-            };
             std::vector<CaseStressorRecord> round_stressor_records;
+            // A round is one sequential batch of the year.  Its electrical and
+            // reliability results are committed exactly once.  The degradation
+            // state present at the beginning of the batch selects the thermal
+            // resistance used for that batch.
+            const DegradationParameterState round_parameter_state = current_parameter_state();
+            const double capacitor_thermal_resistance_scale =
+                1.0 + static_cast<double>(round_parameter_state[4]) * kCriticalDegradationStep;
+            const double igbt_thermal_resistance_scale =
+                1.0 + static_cast<double>(std::max(round_parameter_state[5],
+                                                   round_parameter_state[6])) *
+                          kCriticalDegradationStep;
+            RoundComputationCache& round_cache =
+                round_computation_cache[static_cast<std::size_t>(round)];
+            const bool reuse_round_cache =
+                round_cache.valid && round_cache.parameter_state == round_parameter_state;
+
+            if (!reuse_round_cache) {
+                for (int i = round_start_case; i < round_end_case; ++i) {
+                    const std::size_t idx = static_cast<std::size_t>(i);
+                    validation_case_processed[idx] = 0;
+                    if (model_validation_enabled) {
+                        model_validation_records[idx].case_processed = false;
+                    }
+                }
+            }
+
+            std::string thermal_action = reuse_round_cache
+                ? "reuse"
+                : (round_cache.valid ? "updated" : "initial");
+            std::cout << "TRACEPV_THERMAL action=" << thermal_action
+                      << " iteration=" << mission_profile_iteration
+                      << " round=" << (round + 1) << "/" << options.num_rounds
+                      << " pass=" << round_attempt
+                      << " critical_step_percent="
+                      << static_cast<int>(std::lround(kCriticalDegradationStep * 100.0))
+                      << std::endl;
+
+            if (reuse_round_cache) {
+                round_fan_stressor_electrical_external = round_cache.totals.fan_electrical_external;
+                round_fan_stressor_electrical_internal = round_cache.totals.fan_electrical_internal;
+                round_fan_stressor_mechanical_external = round_cache.totals.fan_mechanical_external;
+                round_fan_stressor_mechanical_internal = round_cache.totals.fan_mechanical_internal;
+                round_capacitor_stressor = round_cache.totals.capacitor;
+                round_igbt_stressor_deltaT = round_cache.totals.igbt_deltaT;
+                round_igbt_stressor_arrhenius = round_cache.totals.igbt_arrhenius;
+                round_pcb_degradation = round_cache.totals.pcb;
+                round_stressor_records = round_cache.records;
+                cases_processed_in_round =
+                    round_cache.cases_processed > 0 ? round_cache.cases_processed : round_cases;
+                total_cases_processed += cases_processed_in_round;
+                std::cout << "Reusing cached loss/thermal/reliability results for round "
+                          << (round + 1)
+                          << " (no critical degradation bucket crossed)."
+                          << std::endl;
+                cases_reported_in_round = round_cases;
+                std::cout << "TRACEPV_PROGRESS iteration=" << mission_profile_iteration
+                          << " round=" << (round + 1) << "/" << options.num_rounds
+                          << " pass=" << round_attempt
+                          << " processed=" << round_cases
+                          << " total=" << round_cases << std::endl;
+            } else if (round_cache.valid) {
+                std::cout << "Thermal parameter bucket changed before round "
+                          << (round + 1)
+                          << "; processing this new batch with the updated thermal state."
+                          << std::endl;
+            }
             
             // Use OpenMP to distribute batches across GPUs
+            if (!reuse_round_cache) {
             #pragma omp parallel
             {
                 // Get CPU thread ID and assign to corresponding GPU
@@ -758,6 +1637,7 @@ int main(int argc, char** argv) {
                         // GPU 1: batches 1, num_gpus+1, 2*num_gpus+1, ...
                         // etc.
                         double thread_simulation_time = 0.0;
+                        ProfilingTotals thread_profile;
                         int thread_cases_processed = 0;
                         
                         // Accumulate temperature data for rainflow counting (per thread)
@@ -794,44 +1674,117 @@ int main(int argc, char** argv) {
                         // PCB: accumulated degradation (1/Nf per cycle)
                         double pcb_degradation = 0.0;
                         
-                        for (int batch = cpu_thread_id; batch < round_batches && !round_terminated_early; batch += num_gpus) {
-                            int batch_start = case_index + batch * batch_size;
-                            int batch_end = std::min(batch_start + batch_size, case_index + round_cases);
-                            int batch_cases = batch_end - batch_start;
-                            
-                            if (batch_cases <= 0) continue;
-                            
-                            // Prepare batch of parameters
+                        struct PreparedBatch {
+                            int batch = 0;
+                            int batch_start = 0;
+                            int batch_end = 0;
+                            int batch_cases = 0;
                             std::vector<SimulationParameters> params_batch;
-                            params_batch.reserve(batch_cases);
-                            
-                            for (int i = 0; i < batch_cases; ++i) {
-                                int case_idx = batch_start + i;
+                            BatchOutputs batch_outputs;
+                            double electrical_wall_s = 0.0;
+                        };
+
+                        auto prepare_batch = [&](int batch) {
+                            PreparedBatch prepared;
+                            prepared.batch = batch;
+                            prepared.batch_start = case_index + batch * batch_size;
+                            prepared.batch_end = std::min(prepared.batch_start + batch_size, case_index + round_cases);
+                            prepared.batch_cases = prepared.batch_end - prepared.batch_start;
+                            if (prepared.batch_cases <= 0) {
+                                return prepared;
+                            }
+
+                            prepared.params_batch.reserve(prepared.batch_cases);
+                            for (int i = 0; i < prepared.batch_cases; ++i) {
+                                int case_idx = prepared.batch_start + i;
                                 if (case_idx >= total_cases) break;
-                                
+
                                 const SimulationCase& sc = all_cases[case_idx];
-                                
-                                // Get IV curve data for this case
-                                static const IVCurveData default_iv_data;  // Default constructor initializes all to 0/false
+                                static const IVCurveData default_iv_data;
                                 const IVCurveData& iv_data = (case_idx < static_cast<int>(iv_curve_data.size())) ?
                                     iv_curve_data[case_idx] : default_iv_data;
-                                
-                                // Update parameters for this case with IV curve data
+
                                 SimulationParameters params = base_params;
                                 update_params_for_case(params, sc, iv_data);
-                                params_batch.push_back(params);
+                                prepared.params_batch.push_back(params);
                             }
-                            
-                            // Process batch of cases together on this GPU (or skip if using stored results)
-                            BatchOutputs batch_outputs;
-                            if (!skip_electrical_simulation) {
-                                // Run electrical simulation
-                                batch_outputs = run_unified_gpu_batch(params_batch);
+                            return prepared;
+                        };
+
+                        auto run_prepared_batch = [&](PreparedBatch prepared) {
+                            if (prepared.batch_cases <= 0) {
+                                return prepared;
+                            }
+                            if (static_electrical_result.has_value() || skip_electrical_simulation) {
+                                prepared.batch_outputs.outputs.resize(prepared.params_batch.size());
+                                prepared.batch_outputs.elapsed_s = 0.0;
+                                return prepared;
+                            }
+
+                            cudaSetDevice(cpu_thread_id);
+                            const auto electrical_start = std::chrono::steady_clock::now();
+                            prepared.batch_outputs =
+                                run_unified_gpu_batch(prepared.params_batch, options.precision);
+                            prepared.electrical_wall_s =
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - electrical_start).count();
+                            return prepared;
+                        };
+
+                        const bool use_pipeline =
+                            options.pipeline_enabled &&
+                            !static_electrical_result.has_value() &&
+                            !skip_electrical_simulation &&
+                            round_batches > 1;
+
+                        std::future<PreparedBatch> next_batch_future;
+                        bool next_batch_future_valid = false;
+                        auto launch_batch = [&](int batch) {
+                            PreparedBatch prepared = prepare_batch(batch);
+                            if (!use_pipeline) {
+                                return std::async(std::launch::deferred,
+                                                  [prepared = std::move(prepared), &run_prepared_batch]() mutable {
+                                                      return run_prepared_batch(std::move(prepared));
+                                                  });
+                            }
+                            return std::async(std::launch::async,
+                                              [prepared = std::move(prepared), &run_prepared_batch]() mutable {
+                                                  return run_prepared_batch(std::move(prepared));
+                                              });
+                        };
+
+                        if (use_pipeline) {
+                            next_batch_future = launch_batch(cpu_thread_id);
+                            next_batch_future_valid = true;
+                        }
+
+                        for (int batch = cpu_thread_id;
+                             batch < round_batches &&
+                                 !round_terminated_early.load(std::memory_order_relaxed);
+                             batch += num_gpus) {
+                            PreparedBatch prepared;
+                            if (use_pipeline) {
+                                prepared = next_batch_future.get();
+                                next_batch_future_valid = false;
+                                const int next_batch = batch + num_gpus;
+                                if (next_batch < round_batches &&
+                                    !round_terminated_early.load(std::memory_order_relaxed)) {
+                                    next_batch_future = launch_batch(next_batch);
+                                    next_batch_future_valid = true;
+                                }
                             } else {
-                                // Skip electrical simulation - create empty batch_outputs structure
-                                batch_outputs.outputs.resize(params_batch.size());
-                                batch_outputs.elapsed_s = 0.0;
+                                prepared = run_prepared_batch(prepare_batch(batch));
                             }
+
+                            int batch_start = prepared.batch_start;
+                            int batch_end = prepared.batch_end;
+                            int batch_cases = prepared.batch_cases;
+                            std::vector<SimulationParameters> params_batch = std::move(prepared.params_batch);
+                            BatchOutputs batch_outputs = std::move(prepared.batch_outputs);
+                            std::vector<int> loaded_cache_indices;
+
+                            if (batch_cases <= 0) continue;
+
+                            thread_profile.electrical_gpu += prepared.electrical_wall_s;
                             
                             // Collect thermal data for batch reliability assessment
                             std::vector<double> batch_ambient_temps;
@@ -860,51 +1813,64 @@ int main(int argc, char** argv) {
                                 }
                             }
                             
-                            // Collect ambient data first for internal condition calculation
+                            // Collect ambient data for reliability kernels.
+                            // Internal conditions are precomputed once for the full mission
+                            // profile with the DDM environmental model to preserve time-series
+                            // EWMA/rolling state across GPU batches.
+                            std::vector<double> batch_internal_temps;
+                            std::vector<double> batch_internal_rhs;
+                            batch_internal_temps.reserve(batch_outputs.outputs.size());
+                            batch_internal_rhs.reserve(batch_outputs.outputs.size());
                             for (size_t case_idx = 0; case_idx < batch_outputs.outputs.size(); ++case_idx) {
                                 int actual_case_idx = batch_start + static_cast<int>(case_idx);
                                 const SimulationCase& sc = all_cases[actual_case_idx];
                                 batch_ambient_temps.push_back(sc.ambient_temperature);
                                 batch_ambient_rhs.push_back(sc.rh);
                                 batch_ac_voltages.push_back(sc.ac_voltage);
+                                batch_internal_temps.push_back(all_internal_temps[actual_case_idx]);
+                                batch_internal_rhs.push_back(all_internal_rhs[actual_case_idx]);
                             }
                             
-                            // Calculate internal temperature and RH for all cases in batch
-                            std::vector<double> batch_internal_temps;
-                            std::vector<double> batch_internal_rhs;
-                            calculate_internal_conditions(
-                                batch_ambient_temps,
-                                batch_ambient_rhs,
-                                batch_ac_voltages,
-                                batch_internal_temps,
-                                batch_internal_rhs
-                            );
-                            
-                            // Process stress calculation, loss model, and thermal model for each case
+                            const auto stress_loss_thermal_start = std::chrono::steady_clock::now();
+                            std::vector<StressResults> batch_stresses(batch_outputs.outputs.size());
+                            std::vector<double> batch_ac_powers(batch_outputs.outputs.size(), 0.0);
                             for (size_t case_idx = 0; case_idx < batch_outputs.outputs.size(); ++case_idx) {
                                 const SimulationParameters& params = params_batch[case_idx];
-                                
-                                // Get the corresponding simulation case for ambient conditions
                                 int actual_case_idx = batch_start + static_cast<int>(case_idx);
                                 const SimulationCase& sc = all_cases[actual_case_idx];
-                                
-                                // Calculate stress waveforms (V_ce, I_c, I_cap) - includes RMS calculation
-                                // OR use stored results if skipping electrical simulation
-                                StressResults stress;
-                                double ac_power;
-                                
-                                if (skip_electrical_simulation) {
-                                    // Use stored electrical simulation results
-                                    if (actual_case_idx < static_cast<int>(stored_electrical_results.size())) {
-                                        const StoredElectricalResults& stored = stored_electrical_results[actual_case_idx];
+                                StressResults& stress = batch_stresses[case_idx];
+                                double& ac_power = batch_ac_powers[case_idx];
+
+                                const auto stress_calculation_start = std::chrono::steady_clock::now();
+                                if (static_electrical_result.has_value()) {
+                                    const StoredElectricalResults& stored = *static_electrical_result;
+                                    stress.I_cap_rms = stored.I_cap_rms;
+                                    stress.V_ce = stored.V_ce;
+                                    stress.I_c = stored.I_c;
+                                    stress.I_cap = stored.I_cap;
+                                    ac_power = stored.ac_power;
+                                    if (cache_electrical_results && !static_electrical_profile &&
+                                        actual_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                        stored_electrical_results[actual_case_idx] = stored;
+                                    }
+                                } else if (skip_electrical_simulation) {
+                                    const int stored_case_idx = static_electrical_profile ? 0 : actual_case_idx;
+                                    if (stored_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                        StoredElectricalResults& stored = stored_electrical_results[stored_case_idx];
+                                        if (stored.cache_on_disk &&
+                                            stored.time_points.empty() &&
+                                            stored.I_cap.empty()) {
+                                            if (read_stored_reference_cache(stored)) {
+                                                loaded_cache_indices.push_back(stored_case_idx);
+                                            }
+                                        }
                                         stress.I_cap_rms = stored.I_cap_rms;
                                         stress.V_ce = stored.V_ce;
                                         stress.I_c = stored.I_c;
-                                        // I_cap vector not needed for loss/thermal models, but initialize empty for consistency
-                                        stress.I_cap.clear();
+                                        stress.I_cap = stored.I_cap;
                                         ac_power = stored.ac_power;
                                     } else {
-                                        std::cerr << "Warning: Case index " << actual_case_idx 
+                                        std::cerr << "Warning: Case index " << actual_case_idx
                                                   << " out of range for stored results. Using zero values." << std::endl;
                                         stress.I_cap_rms = 0.0;
                                         stress.V_ce.clear();
@@ -913,35 +1879,286 @@ int main(int argc, char** argv) {
                                         ac_power = 0.0;
                                     }
                                 } else {
-                                    // Run electrical simulation and calculate stress
                                     const UnifiedOutputs& outputs = batch_outputs.outputs[case_idx];
                                     stress = calculate_stress(outputs, params);
-                                    
                                     if (sc.has_ac_power) {
                                         ac_power = sc.ac_power;
                                     } else {
-                                        // Calculate AC power from I2 (grid-side inductor currents) and Vc (filter capacitor voltages)
                                         ACPowerResults ac_power_results = calculate_ac_power(outputs, params);
                                         ac_power = calculate_equivalent_ac_power(ac_power_results.p_AC_instantaneous);
                                     }
-                                    
-                                    // Store results after first iteration, or update results when iteration > 10
-                                    if (actual_case_idx < static_cast<int>(stored_electrical_results.size())) {
+
+                                    if (cache_electrical_results &&
+                                        actual_case_idx < static_cast<int>(stored_electrical_results.size())) {
                                         if (mission_profile_iteration == 1) {
-                                            // Store results after first iteration
                                             stored_electrical_results[actual_case_idx].I_cap_rms = stress.I_cap_rms;
-                                            stored_electrical_results[actual_case_idx].V_ce = stress.V_ce;
-                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
-                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
-                                        } else if (mission_profile_iteration > 10) {
-                                            // Update stored results when iteration > 10 (used for next iteration)
-                                            stored_electrical_results[actual_case_idx].I_cap_rms = stress.I_cap_rms;
-                                            stored_electrical_results[actual_case_idx].V_ce = stress.V_ce;
-                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
-                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
+	                                            stored_electrical_results[actual_case_idx].V_ce = stress.V_ce;
+	                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
+	                                            stored_electrical_results[actual_case_idx].I_cap = stress.I_cap;
+	                                            stored_electrical_results[actual_case_idx].time_points = outputs.time_points;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_d = outputs.duty_d;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_q = outputs.duty_q;
+	                                            stored_electrical_results[actual_case_idx].average_model_dq_states = outputs.average_model_dq_states;
+	                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
+	                                            stored_electrical_results[actual_case_idx].has_capacitor_reference_inputs =
+	                                                !stored_electrical_results[actual_case_idx].time_points.empty() &&
+	                                                !stored_electrical_results[actual_case_idx].I_cap.empty();
+	                                            std::string igbt_cache_message;
+	                                            stored_electrical_results[actual_case_idx].has_igbt_reference_inputs =
+	                                                build_igbt_reference_cached_input(
+	                                                    outputs,
+	                                                    params,
+	                                                    stored_electrical_results[actual_case_idx].igbt_devices,
+	                                                    stored_electrical_results[actual_case_idx].igbt_tavg,
+	                                                    stored_electrical_results[actual_case_idx].igbt_tsim,
+	                                                    igbt_cache_message);
+	                                            if (!stored_electrical_results[actual_case_idx].has_igbt_reference_inputs &&
+	                                                !igbt_cache_message.empty()) {
+	                                                std::cerr << "Warning: IGBT reference cache unavailable for case "
+	                                                          << actual_case_idx << ": " << igbt_cache_message << std::endl;
+	                                            }
+	                                            const auto cache_path = electrical_reference_cache_dir /
+	                                                ("case_" + std::to_string(actual_case_idx) + ".bin");
+	                                            write_stored_reference_cache(
+	                                                stored_electrical_results[actual_case_idx],
+	                                                cache_path);
+	                                            release_stored_reference_payload(
+	                                                stored_electrical_results[actual_case_idx]);
+	                                        } else if (mission_profile_iteration > 10) {
+	                                            stored_electrical_results[actual_case_idx].I_cap_rms = stress.I_cap_rms;
+	                                            stored_electrical_results[actual_case_idx].V_ce = stress.V_ce;
+	                                            stored_electrical_results[actual_case_idx].I_c = stress.I_c;
+	                                            stored_electrical_results[actual_case_idx].I_cap = stress.I_cap;
+	                                            stored_electrical_results[actual_case_idx].time_points = outputs.time_points;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_d = outputs.duty_d;
+	                                            stored_electrical_results[actual_case_idx].average_model_duty_q = outputs.duty_q;
+	                                            stored_electrical_results[actual_case_idx].average_model_dq_states = outputs.average_model_dq_states;
+	                                            stored_electrical_results[actual_case_idx].ac_power = ac_power;
+	                                            stored_electrical_results[actual_case_idx].has_capacitor_reference_inputs =
+	                                                !stored_electrical_results[actual_case_idx].time_points.empty() &&
+	                                                !stored_electrical_results[actual_case_idx].I_cap.empty();
+	                                            std::string igbt_cache_message;
+	                                            stored_electrical_results[actual_case_idx].has_igbt_reference_inputs =
+	                                                build_igbt_reference_cached_input(
+	                                                    outputs,
+	                                                    params,
+	                                                    stored_electrical_results[actual_case_idx].igbt_devices,
+	                                                    stored_electrical_results[actual_case_idx].igbt_tavg,
+	                                                    stored_electrical_results[actual_case_idx].igbt_tsim,
+	                                                    igbt_cache_message);
+	                                            if (!stored_electrical_results[actual_case_idx].has_igbt_reference_inputs &&
+	                                                !igbt_cache_message.empty()) {
+	                                                std::cerr << "Warning: IGBT reference cache unavailable for case "
+	                                                          << actual_case_idx << ": " << igbt_cache_message << std::endl;
+	                                            }
+	                                            const auto cache_path = electrical_reference_cache_dir /
+	                                                ("case_" + std::to_string(actual_case_idx) + ".bin");
+	                                            write_stored_reference_cache(
+	                                                stored_electrical_results[actual_case_idx],
+	                                                cache_path);
+	                                            release_stored_reference_payload(
+	                                                stored_electrical_results[actual_case_idx]);
+	                                        }
+                                    }
+                                }
+
+                                if (model_validation_enabled) {
+                                    ModelValidationRecord& record =
+                                        model_validation_records[static_cast<std::size_t>(actual_case_idx)];
+                                    record.capacitor_rms_current_a = stress.I_cap_rms;
+
+                                    const UnifiedOutputs* a2s_source = nullptr;
+                                    const StoredElectricalResults* stored_source = nullptr;
+                                    if (static_electrical_result.has_value()) {
+                                        stored_source = &*static_electrical_result;
+                                    } else if (skip_electrical_simulation) {
+                                        const int stored_case_idx =
+                                            static_electrical_profile ? 0 : actual_case_idx;
+                                        if (stored_case_idx >= 0 &&
+                                            stored_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                            stored_source = &stored_electrical_results[
+                                                static_cast<std::size_t>(stored_case_idx)];
+                                        }
+                                    } else {
+                                        a2s_source = &batch_outputs.outputs[case_idx];
+                                    }
+
+                                    const std::vector<double>* dq_states = nullptr;
+                                    const std::vector<double>* waveform_time = nullptr;
+                                    if (a2s_source != nullptr) {
+                                        record.average_model_duty_d = a2s_source->duty_d;
+                                        record.average_model_duty_q = a2s_source->duty_q;
+                                        dq_states = &a2s_source->average_model_dq_states;
+                                        waveform_time = &a2s_source->time_points;
+                                    } else if (stored_source != nullptr) {
+                                        record.average_model_duty_d = stored_source->average_model_duty_d;
+                                        record.average_model_duty_q = stored_source->average_model_duty_q;
+                                        dq_states = &stored_source->average_model_dq_states;
+                                        waveform_time = &stored_source->time_points;
+                                    }
+
+                                    if (dq_states != nullptr) {
+                                        record.x_dq_ss.fill(ModelValidationRecord::missing_numeric_value());
+                                        record.dq_count = std::min(record.x_dq_ss.size(), dq_states->size());
+                                        std::copy_n(dq_states->begin(), record.dq_count,
+                                                    record.x_dq_ss.begin());
+                                    }
+
+                                    const std::size_t validation_case_idx =
+                                        static_cast<std::size_t>(actual_case_idx);
+                                    if (mission_profile_iteration == 1 &&
+                                        validation_waveform_selector->contains(validation_case_idx) &&
+                                        validation_waveform_written[validation_case_idx] == 0) {
+                                        try {
+                                            if (waveform_time == nullptr || waveform_time->empty()) {
+                                                throw std::runtime_error(
+                                                    "A2S time vector is unavailable for the selected case");
+                                            }
+                                            const std::filesystem::path waveform_path =
+                                                model_validation_dir / "a2s_core" /
+                                                ("case_" + std::to_string(actual_case_idx) + ".csv");
+                                            write_a2s_core_matrix_csv(
+                                                waveform_path,
+                                                *waveform_time,
+                                                stress.V_ce,
+                                                stress.I_c);
+                                            validation_waveform_written[validation_case_idx] = 1;
+                                        } catch (const std::exception& validation_error) {
+                                            #pragma omp critical(tracepv_validation_output)
+                                            {
+                                                std::cerr
+                                                    << "Warning: failed to export A2S core matrix for case "
+                                                    << actual_case_idx << ": "
+                                                    << validation_error.what() << std::endl;
+                                            }
                                         }
                                     }
                                 }
+                                thread_profile.stress_calculation +=
+                                    std::chrono::duration<double>(std::chrono::steady_clock::now() - stress_calculation_start).count();
+                            }
+
+                            std::vector<CapacitorReferenceThermalResult> batch_capacitor_reference_thermal(batch_outputs.outputs.size());
+                            if (reference_post_processing) {
+                                const auto capacitor_reference_batch_start = std::chrono::steady_clock::now();
+                                std::vector<CapacitorReferenceThermalInput> capacitor_reference_inputs(batch_outputs.outputs.size());
+                                for (size_t case_idx = 0; case_idx < batch_outputs.outputs.size(); ++case_idx) {
+                                    const int actual_case_idx = batch_start + static_cast<int>(case_idx);
+                                    const StoredElectricalResults* stored_reference = nullptr;
+                                    if (static_electrical_result.has_value()) {
+                                        stored_reference = &*static_electrical_result;
+                                    } else if (skip_electrical_simulation) {
+                                        const int stored_case_idx = static_electrical_profile ? 0 : actual_case_idx;
+                                        if (stored_case_idx >= 0 &&
+                                            stored_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                            stored_reference = &stored_electrical_results[stored_case_idx];
+                                        }
+                                    }
+                                    double rth_amb_value = cap_coeffs_loaded ? cap_coeffs.rth_amb : 0.5;
+                                    double rth_surf_value = cap_coeffs_loaded ? cap_coeffs.rth_surf : 0.3;
+                                    rth_amb_value *= capacitor_thermal_resistance_scale;
+                                    rth_surf_value *= capacitor_thermal_resistance_scale;
+                                    double rth_core_surface = std::max(0.0, rth_amb_value - rth_surf_value);
+                                    if (stored_reference && stored_reference->has_capacitor_reference_inputs) {
+                                        capacitor_reference_inputs[case_idx].time_points = &stored_reference->time_points;
+                                        capacitor_reference_inputs[case_idx].capacitor_current = &stored_reference->I_cap;
+                                    } else if (!skip_electrical_simulation &&
+                                               case_idx < batch_outputs.outputs.size()) {
+                                        capacitor_reference_inputs[case_idx].time_points = &batch_outputs.outputs[case_idx].time_points;
+                                        capacitor_reference_inputs[case_idx].capacitor_current = &batch_stresses[case_idx].I_cap;
+                                    }
+                                    capacitor_reference_inputs[case_idx].current_scale =
+                                        1.0 / kDcLinkCapacitorParallelDeviceCount;
+                                    capacitor_reference_inputs[case_idx].ambient_temperature = batch_internal_temps[case_idx];
+                                    capacitor_reference_inputs[case_idx].rth_surface_ambient = rth_surf_value;
+                                    capacitor_reference_inputs[case_idx].rth_core_surface = rth_core_surface;
+                                }
+                                batch_capacitor_reference_thermal =
+                                    calculate_capacitor_reference_thermal_batch(capacitor_reference_inputs);
+                                thread_profile.capacitor_thermal +=
+                                    std::chrono::duration<double>(std::chrono::steady_clock::now() - capacitor_reference_batch_start).count();
+                                for (const auto& capacitor_reference_thermal : batch_capacitor_reference_thermal) {
+                                    thread_profile.capacitor_ref_harmonic +=
+                                        capacitor_reference_thermal.harmonic_extraction_s;
+                                    thread_profile.capacitor_ref_esr_grid +=
+                                        capacitor_reference_thermal.esr_grid_s;
+                                    thread_profile.capacitor_ref_loss_grid +=
+                                        capacitor_reference_thermal.loss_grid_s;
+                                    thread_profile.capacitor_ref_polyfit +=
+                                        capacitor_reference_thermal.polyfit_s;
+                                    thread_profile.capacitor_ref_iteration +=
+                                        capacitor_reference_thermal.thermal_iteration_s;
+                                }
+                            }
+
+                            std::vector<IgbtReferenceThermalResult> batch_igbt_reference_thermal(batch_outputs.outputs.size());
+                            if (reference_post_processing) {
+                                const auto igbt_reference_batch_start = std::chrono::steady_clock::now();
+                                std::vector<IgbtReferenceThermalInput> igbt_reference_inputs(batch_outputs.outputs.size());
+                                std::vector<IgbtReferenceCachedThermalInput> cached_igbt_reference_inputs(batch_outputs.outputs.size());
+                                bool use_cached_igbt_reference_inputs = false;
+                                for (size_t case_idx = 0; case_idx < batch_outputs.outputs.size(); ++case_idx) {
+                                    const int actual_case_idx = batch_start + static_cast<int>(case_idx);
+                                    const StoredElectricalResults* stored_reference = nullptr;
+                                    if (static_electrical_result.has_value()) {
+                                        stored_reference = &*static_electrical_result;
+                                    } else if (skip_electrical_simulation) {
+                                        const int stored_case_idx = static_electrical_profile ? 0 : actual_case_idx;
+                                        if (stored_case_idx >= 0 &&
+                                            stored_case_idx < static_cast<int>(stored_electrical_results.size())) {
+                                            stored_reference = &stored_electrical_results[stored_case_idx];
+                                        }
+                                    }
+                                    if (stored_reference && stored_reference->has_igbt_reference_inputs) {
+                                        cached_igbt_reference_inputs[case_idx].devices = &stored_reference->igbt_devices;
+                                        cached_igbt_reference_inputs[case_idx].tavg = stored_reference->igbt_tavg;
+                                        cached_igbt_reference_inputs[case_idx].tsim = stored_reference->igbt_tsim;
+                                        cached_igbt_reference_inputs[case_idx].ambient_temperature =
+                                            all_cases[batch_start + static_cast<int>(case_idx)].ambient_temperature;
+                                        use_cached_igbt_reference_inputs = true;
+                                    } else if (!skip_electrical_simulation &&
+                                               case_idx < batch_outputs.outputs.size()) {
+                                        igbt_reference_inputs[case_idx].outputs = &batch_outputs.outputs[case_idx];
+                                        igbt_reference_inputs[case_idx].params = &params_batch[case_idx];
+                                    }
+                                    igbt_reference_inputs[case_idx].ambient_temperature =
+                                        all_cases[batch_start + static_cast<int>(case_idx)].ambient_temperature;
+                                }
+                                if (use_cached_igbt_reference_inputs) {
+                                    batch_igbt_reference_thermal = calculate_igbt_reference_thermal_batch_cached(
+                                        cached_igbt_reference_inputs,
+                                        "IGBT/MATLAB_code/parameters",
+                                        20.0,
+                                        options.thermal_step_s);
+                                } else {
+                                    batch_igbt_reference_thermal = calculate_igbt_reference_thermal_batch(
+                                        igbt_reference_inputs,
+                                        "IGBT/MATLAB_code/parameters",
+                                        20.0,
+                                        options.thermal_step_s);
+                                }
+                                thread_profile.igbt_thermal +=
+                                    std::chrono::duration<double>(std::chrono::steady_clock::now() - igbt_reference_batch_start).count();
+                                for (const auto& igbt_reference_thermal : batch_igbt_reference_thermal) {
+                                    thread_profile.igbt_parameter_lookup += igbt_reference_thermal.parameter_lookup_s;
+                                    thread_profile.igbt_input_build += igbt_reference_thermal.input_build_s;
+                                    thread_profile.igbt_loss_igbt1 += igbt_reference_thermal.loss_igbt1_s;
+                                    thread_profile.igbt_loss_igbt2 += igbt_reference_thermal.loss_igbt2_s;
+                                    thread_profile.igbt_loss_diode1 += igbt_reference_thermal.loss_diode1_s;
+                                    thread_profile.igbt_loss_diode2 += igbt_reference_thermal.loss_diode2_s;
+                                    thread_profile.igbt_thermal_rc += igbt_reference_thermal.thermal_rc_s;
+                                }
+                            }
+
+                            // Process loss model and thermal model for each case
+                            for (size_t case_idx = 0; case_idx < batch_outputs.outputs.size(); ++case_idx) {
+                                const SimulationParameters& params = params_batch[case_idx];
+
+                                // Get the corresponding simulation case for ambient conditions
+                                int actual_case_idx = batch_start + static_cast<int>(case_idx);
+                                const SimulationCase& sc = all_cases[actual_case_idx];
+                                const StressResults& stress = batch_stresses[case_idx];
+                                double ac_power = batch_ac_powers[case_idx];
                                 
                                 // Calculate losses from stress waveforms
                                 // 2.1 Capacitor loss model: input I_cap_rms and ESR, output capacitor loss
@@ -950,72 +2167,189 @@ int main(int argc, char** argv) {
                                 if (params.topology_level == 3) {
                                     esr_value = esr_value * 2.0;  // Two capacitors in series: ESR_total = ESR1 + ESR2
                                 }
+                                const auto capacitor_loss_start = std::chrono::steady_clock::now();
                                 CapacitorLossResult capacitor_loss = calculate_capacitor_loss(stress.I_cap_rms, esr_value);
+                                thread_profile.capacitor_loss +=
+                                    std::chrono::duration<double>(std::chrono::steady_clock::now() - capacitor_loss_start).count();
                                 
                                 // Debug: Print capacitor loss calculation details
                                 static bool loss_debug_printed = false;
                                 if (!loss_debug_printed && case_idx == 0) {
-                                    std::cerr << "DEBUG: Capacitor loss calculation:" << std::endl;
-                                    std::cerr << "  I_cap_rms: " << stress.I_cap_rms << " A" << std::endl;
-                                    std::cerr << "  ESR: " << esr_value << " Ohm" << std::endl;
-                                    std::cerr << "  Capacitor loss: " << capacitor_loss.capacitor_loss << " W" << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: Capacitor loss calculation:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  I_cap_rms: " << stress.I_cap_rms << " A" << std::endl;
+                                    tracepv::reporting::debug_output() << "  ESR: " << esr_value << " Ohm" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Capacitor loss: " << capacitor_loss.capacitor_loss << " W" << std::endl;
                                     loss_debug_printed = true;
                                 }
                                 
-                                // 2.2 Power module loss model: input V_ce and I_c, output power module loss
-                                PowerModuleLossResult power_module_loss = calculate_power_module_loss(stress.V_ce, stress.I_c);
+                                // 2.2 Power module loss is obtained from the reference IGBT loss/thermal model below.
+                                // The legacy V_ce/I_c-only API is intentionally not used for accurate simulation.
+                                PowerModuleLossResult power_module_loss;
                                 
                                 // Calculate thermal response from losses
                                 // 2.3 Capacitor thermal model: input capacitor loss, internal temp, rth_amb, rth_surf
                                 //     output capacitor hotspot temp and capacitor surface temp
                                 double rth_amb_value = cap_coeffs_loaded ? cap_coeffs.rth_amb : 0.5; // Use default if not loaded
                                 double rth_surf_value = cap_coeffs_loaded ? cap_coeffs.rth_surf : 0.3; // Use default if not loaded
+                                rth_amb_value *= capacitor_thermal_resistance_scale;
+                                rth_surf_value *= capacitor_thermal_resistance_scale;
                                 double internal_temp = batch_internal_temps[case_idx];
                                 
                                 // Debug: Print thermal model inputs
                                 static bool thermal_debug_printed = false;
                                 if (!thermal_debug_printed && case_idx == 0) {
-                                    std::cerr << "DEBUG: Capacitor thermal model inputs:" << std::endl;
-                                    std::cerr << "  Capacitor loss: " << capacitor_loss.capacitor_loss << " W" << std::endl;
-                                    std::cerr << "  Internal temp: " << internal_temp << " C" << std::endl;
-                                    std::cerr << "  rth_amb: " << rth_amb_value << " K/W" << std::endl;
-                                    std::cerr << "  rth_surf: " << rth_surf_value << " K/W" << std::endl;
-                                    thermal_debug_printed = true;
-                                }
+                                    tracepv::reporting::debug_output() << "DEBUG: Capacitor thermal model inputs:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Capacitor loss: " << capacitor_loss.capacitor_loss << " W" << std::endl;
+	                                    tracepv::reporting::debug_output() << "  Internal temp: " << internal_temp << " C" << std::endl;
+	                                    tracepv::reporting::debug_output() << "  rth_amb: " << rth_amb_value << " K/W" << std::endl;
+	                                    tracepv::reporting::debug_output() << "  rth_surf: " << rth_surf_value << " K/W" << std::endl;
+	                                }
                                 
-                                CapacitorThermalResult capacitor_thermal = calculate_capacitor_thermal(
-                                    capacitor_loss.capacitor_loss,
-                                    internal_temp,
-                                    rth_amb_value,
-                                    rth_surf_value
-                                );
+                                const auto capacitor_thermal_start = std::chrono::steady_clock::now();
+                                CapacitorReferenceThermalResult capacitor_reference_thermal{};
+                                if (reference_post_processing &&
+                                    case_idx < batch_capacitor_reference_thermal.size()) {
+                                    capacitor_reference_thermal = batch_capacitor_reference_thermal[case_idx];
+                                    if (capacitor_reference_thermal.valid &&
+                                        (capacitor_reference_thermal.hotspot_temperature > 200.0 ||
+                                         capacitor_reference_thermal.hotspot_temperature - internal_temp > 150.0 ||
+                                         capacitor_reference_thermal.loss > std::max(10.0, 20.0 * capacitor_loss.capacitor_loss))) {
+                                        capacitor_reference_thermal.valid = false;
+                                        capacitor_reference_thermal.message =
+                                            "reference harmonic ESR result rejected by sanity check; using database ESR thermal model";
+                                    }
+                                }
+
+                                CapacitorThermalResult capacitor_thermal{};
+                                if (capacitor_reference_thermal.valid) {
+                                    capacitor_loss.capacitor_loss = capacitor_reference_thermal.loss;
+                                    capacitor_thermal.capacitor_hotspot_temperature =
+                                        capacitor_reference_thermal.hotspot_temperature;
+                                    capacitor_thermal.capacitor_surface_temperature =
+                                        capacitor_reference_thermal.surface_temperature;
+                                } else {
+                                    const auto capacitor_fallback_start = std::chrono::steady_clock::now();
+                                    capacitor_thermal = calculate_capacitor_thermal(
+                                        capacitor_loss.capacitor_loss,
+                                        internal_temp,
+                                        rth_amb_value,
+                                        rth_surf_value
+                                    );
+                                    thread_profile.capacitor_fallback_static +=
+                                        std::chrono::duration<double>(std::chrono::steady_clock::now() - capacitor_fallback_start).count();
+                                }
+                                thread_profile.capacitor_thermal +=
+                                    std::chrono::duration<double>(std::chrono::steady_clock::now() - capacitor_thermal_start).count();
                                 
                                 // Debug: Print thermal model output
                                 if (!thermal_debug_printed && case_idx == 0) {
-                                    std::cerr << "DEBUG: Capacitor thermal model output:" << std::endl;
-                                    std::cerr << "  Hotspot temp: " << capacitor_thermal.capacitor_hotspot_temperature << " C" << std::endl;
-                                    std::cerr << "  Surface temp: " << capacitor_thermal.capacitor_surface_temperature << " C" << std::endl;
-                                }
+                                    tracepv::reporting::debug_output() << "DEBUG: Capacitor thermal model output:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Model: " << (capacitor_reference_thermal.valid ? capacitor_reference_thermal.message : "fallback RMS ESR/static thermal model") << std::endl;
+                                    if (!capacitor_reference_thermal.valid && !capacitor_reference_thermal.message.empty()) {
+                                        tracepv::reporting::debug_output() << "  Reference model unavailable: " << capacitor_reference_thermal.message << std::endl;
+                                    }
+	                                    tracepv::reporting::debug_output() << "  Hotspot temp: " << capacitor_thermal.capacitor_hotspot_temperature << " C" << std::endl;
+	                                    tracepv::reporting::debug_output() << "  Surface temp: " << capacitor_thermal.capacitor_surface_temperature << " C" << std::endl;
+	                                    thermal_debug_printed = true;
+	                                }
                                 
-                                // 2.4 Power module thermal model: input ac_power (calculated from simulation), ambient temp
-                                //     output junction temperature
-                                //     Formula: Tj = T_amb + ac_power / 30000 * (100 - 45)
-                                PowerModuleThermalResult power_module_thermal = calculate_power_module_thermal(
-                                    ac_power,
-                                    sc.ambient_temperature
-                                );
+                                // 2.4 Power module thermal model.
+                                // Prefer the reference IGBT loss + RC thermal model when full A2S waveforms are available.
+                                const auto igbt_thermal_start = std::chrono::steady_clock::now();
+                                PowerModuleThermalResult power_module_thermal{};
+                                IgbtReferenceThermalResult igbt_reference_thermal{};
+                                if (reference_post_processing &&
+                                    case_idx < batch_igbt_reference_thermal.size()) {
+                                    igbt_reference_thermal = batch_igbt_reference_thermal[case_idx];
+                                }
+                                if (igbt_reference_thermal.valid) {
+                                    power_module_loss.power_module_loss =
+                                        igbt_reference_thermal.average_total_loss;
+                                    power_module_loss.valid = true;
+                                    power_module_loss.message = igbt_reference_thermal.message;
+                                    power_module_thermal.junction_temperature =
+                                        sc.ambient_temperature +
+                                        (igbt_reference_thermal.junction_temperature -
+                                         sc.ambient_temperature) *
+                                            igbt_thermal_resistance_scale;
+                                } else {
+                                    power_module_thermal = calculate_power_module_thermal(
+                                        ac_power,
+                                        sc.ambient_temperature
+                                    );
+                                    power_module_thermal.junction_temperature =
+                                        sc.ambient_temperature +
+                                        (power_module_thermal.junction_temperature -
+                                         sc.ambient_temperature) *
+                                            igbt_thermal_resistance_scale;
+                                }
+                                thread_profile.igbt_thermal +=
+                                    std::chrono::duration<double>(std::chrono::steady_clock::now() - igbt_thermal_start).count();
                                 
                                 // Debug: Print IGBT thermal model output
                                 static bool igbt_thermal_debug_printed = false;
                                 if (!igbt_thermal_debug_printed && case_idx == 0) {
-                                    std::cerr << "DEBUG: IGBT thermal model output:" << std::endl;
-                                    std::cerr << "  AC power (thermal input): " << ac_power << " W" << std::endl;
-                                    std::cerr << "  Ambient temp: " << sc.ambient_temperature << " C" << std::endl;
-                                    std::cerr << "  Junction temp: " << power_module_thermal.junction_temperature << " C" << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: IGBT thermal model output:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Model: " << (igbt_reference_thermal.valid ? igbt_reference_thermal.message : "fallback AC-power linear model") << std::endl;
+                                    if (!igbt_reference_thermal.valid && !igbt_reference_thermal.message.empty()) {
+                                        tracepv::reporting::debug_output() << "  Reference model unavailable: " << igbt_reference_thermal.message << std::endl;
+                                    }
+                                    tracepv::reporting::debug_output() << "  AC power (thermal input): " << ac_power << " W" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Ambient temp: " << sc.ambient_temperature << " C" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Junction temp: " << power_module_thermal.junction_temperature << " C" << std::endl;
+                                    if (igbt_reference_thermal.valid) {
+                                        tracepv::reporting::debug_output() << "  Tj devices: IGBT1=" << igbt_reference_thermal.igbt1_temperature
+                                                  << " C, IGBT2=" << igbt_reference_thermal.igbt2_temperature
+                                                  << " C, Diode1=" << igbt_reference_thermal.diode1_temperature
+                                                  << " C, Diode2=" << igbt_reference_thermal.diode2_temperature << " C" << std::endl;
+                                        tracepv::reporting::debug_output() << "  Avg inverter loss: " << igbt_reference_thermal.average_total_loss << " W" << std::endl;
+                                    }
                                     igbt_thermal_debug_printed = true;
                                 }
                                 
                                 // Collect data for batch reliability assessment
+                                validation_capacitor_hotspot[actual_case_idx] =
+                                    capacitor_thermal.capacitor_hotspot_temperature;
+                                validation_capacitor_surface[actual_case_idx] =
+                                    capacitor_thermal.capacitor_surface_temperature;
+                                validation_internal_temperature[actual_case_idx] = internal_temp;
+                                validation_capacitor_loss[actual_case_idx] =
+                                    capacitor_loss.capacitor_loss;
+                                validation_ac_power[actual_case_idx] = ac_power;
+                                validation_igbt_junction[actual_case_idx] =
+                                    power_module_thermal.junction_temperature;
+                                validation_reference_model_used[actual_case_idx] =
+                                    capacitor_reference_thermal.valid ? 1 : 0;
+                                validation_case_processed[actual_case_idx] = 1;
+                                if (model_validation_enabled) {
+                                    ModelValidationRecord& record =
+                                        model_validation_records[static_cast<std::size_t>(actual_case_idx)];
+                                    record.case_processed = true;
+                                    record.capacitor_loss_w = capacitor_loss.capacitor_loss;
+                                    record.capacitor_surface_temperature_c =
+                                        capacitor_thermal.capacitor_surface_temperature;
+                                    record.capacitor_hotspot_temperature_c =
+                                        capacitor_thermal.capacitor_hotspot_temperature;
+                                    record.igbt_junction_temperature_c =
+                                        power_module_thermal.junction_temperature;
+                                    record.capacitor_reference_loss_used =
+                                        capacitor_reference_thermal.valid;
+                                    record.capacitor_reference_temperature_used =
+                                        capacitor_reference_thermal.valid;
+                                    record.capacitor_temperature_adjusted_after_degradation = false;
+                                    record.igbt_reference_loss_used =
+                                        igbt_reference_thermal.valid;
+                                    record.igbt_reference_temperature_used =
+                                        igbt_reference_thermal.valid;
+                                    record.igbt_temperature_adjusted_after_degradation = false;
+                                    record.inverter_average_total_loss_valid =
+                                        power_module_loss.valid &&
+                                        std::isfinite(power_module_loss.power_module_loss);
+                                    record.inverter_average_total_loss_w =
+                                        record.inverter_average_total_loss_valid
+                                            ? power_module_loss.power_module_loss
+                                            : ModelValidationRecord::missing_numeric_value();
+                                }
                                 batch_capacitor_hotspot_temps.push_back(capacitor_thermal.capacitor_hotspot_temperature);
                                 
                                 // Get capacitor voltage based on type
@@ -1036,6 +2370,8 @@ int main(int argc, char** argv) {
                                 
                                 batch_junction_temps.push_back(power_module_thermal.junction_temperature);
                             }
+                            thread_profile.stress_loss_thermal +=
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - stress_loss_thermal_start).count();
                                 
                                 // ====================================================================
                             // Section 5: Reliability Analysis - Degradation Tracking (Batch Processing on GPU)
@@ -1043,6 +2379,7 @@ int main(int argc, char** argv) {
                                 
                             // 5.1 Cooling Fan Reliability: Calculate 4 stressors on GPU
                             // 4 situations: internal electrical, internal mechanical, ambient electrical, ambient mechanical
+                            const auto fan_reliability_start = std::chrono::steady_clock::now();
                             if (!sim_model.fan_cooling_part_number.empty() && !batch_ambient_temps.empty()) {
                                     FanCoefficients fan_coeffs;
                                     if (component_db.load_fan_cooling(sim_model.fan_cooling_part_number, fan_coeffs)) {
@@ -1087,6 +2424,8 @@ int main(int argc, char** argv) {
                                     }
                                     }
                                 }
+                            thread_profile.fan_reliability +=
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - fan_reliability_start).count();
                                 
                                 // 5.2 IGBT Reliability: Accumulate junction temperatures for rainflow counting
                             accumulated_junction_temps.insert(accumulated_junction_temps.end(), 
@@ -1110,6 +2449,7 @@ int main(int argc, char** argv) {
                             }
                                 
                             // 5.3 Capacitor Reliability: Calculate stressor on GPU
+                            const auto capacitor_reliability_start = std::chrono::steady_clock::now();
                             if (!sim_model.capacitor_part_number.empty() && !batch_capacitor_hotspot_temps.empty()) {
                                     CapacitorCoefficients cap_coeffs;
                                     CapacitorType cap_type;
@@ -1118,32 +2458,32 @@ int main(int argc, char** argv) {
                                 // Debug: Check if capacitor loads
                                 bool cap_loaded = component_db.load_capacitor(sim_model.capacitor_part_number, cap_coeffs, cap_type, cap_voltage_type);
                                 if (!cap_loaded) {
-                                    std::cerr << "DEBUG: Failed to load capacitor: " << sim_model.capacitor_part_number << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: Failed to load capacitor: " << sim_model.capacitor_part_number << std::endl;
                                 } else {
                                     cap_coeffs.type = cap_type;
                                     
                                     // Debug: Print capacitor info
                                     static bool debug_printed = false;
                                     if (!debug_printed && batch_capacitor_hotspot_temps.size() > 0) {
-                                        std::cerr << "DEBUG: Capacitor loaded successfully:" << std::endl;
-                                        std::cerr << "  Part number: " << sim_model.capacitor_part_number << std::endl;
-                                        std::cerr << "  Type: " << (cap_type == CapacitorType::FILM ? "FILM" : 
+                                        tracepv::reporting::debug_output() << "DEBUG: Capacitor loaded successfully:" << std::endl;
+                                        tracepv::reporting::debug_output() << "  Part number: " << sim_model.capacitor_part_number << std::endl;
+                                        tracepv::reporting::debug_output() << "  Type: " << (cap_type == CapacitorType::FILM ? "FILM" :
                                                                     cap_type == CapacitorType::ALUMINUM_ELECTROLYTIC ? "ALUMINUM_ELECTROLYTIC" : "OTHER") << std::endl;
-                                        std::cerr << "  Voltage type: " << cap_voltage_type << std::endl;
-                                        std::cerr << "  Batch size: " << batch_capacitor_hotspot_temps.size() << std::endl;
+                                        tracepv::reporting::debug_output() << "  Voltage type: " << cap_voltage_type << std::endl;
+                                        tracepv::reporting::debug_output() << "  Batch size: " << batch_capacitor_hotspot_temps.size() << std::endl;
                                         if (batch_capacitor_voltages.size() > 0) {
-                                            std::cerr << "  First voltage: " << batch_capacitor_voltages[0] << " V" << std::endl;
+                                            tracepv::reporting::debug_output() << "  First voltage: " << batch_capacitor_voltages[0] << " V" << std::endl;
                                         }
-                                        std::cerr << "  First hotspot temp: " << batch_capacitor_hotspot_temps[0] << " C" << std::endl;
+                                        tracepv::reporting::debug_output() << "  First hotspot temp: " << batch_capacitor_hotspot_temps[0] << " C" << std::endl;
                                         if (batch_internal_rhs.size() > 0) {
-                                            std::cerr << "  First internal RH: " << batch_internal_rhs[0] << " %" << std::endl;
+                                            tracepv::reporting::debug_output() << "  First internal RH: " << batch_internal_rhs[0] << " %" << std::endl;
                                         }
                                         if (cap_type == CapacitorType::ALUMINUM_ELECTROLYTIC) {
-                                            std::cerr << "  L0: " << cap_coeffs.coeffs.aluminum.L0 << std::endl;
-                                            std::cerr << "  V0: " << cap_coeffs.coeffs.aluminum.V0 << std::endl;
-                                            std::cerr << "  T0: " << cap_coeffs.coeffs.aluminum.T0 << std::endl;
-                                            std::cerr << "  beta_min: " << cap_coeffs.coeffs.aluminum.beta_min << std::endl;
-                                            std::cerr << "  beta_max: " << cap_coeffs.coeffs.aluminum.beta_max << std::endl;
+                                            tracepv::reporting::debug_output() << "  L0: " << cap_coeffs.coeffs.aluminum.L0 << std::endl;
+                                            tracepv::reporting::debug_output() << "  V0: " << cap_coeffs.coeffs.aluminum.V0 << std::endl;
+                                            tracepv::reporting::debug_output() << "  T0: " << cap_coeffs.coeffs.aluminum.T0 << std::endl;
+                                            tracepv::reporting::debug_output() << "  beta_min: " << cap_coeffs.coeffs.aluminum.beta_min << std::endl;
+                                            tracepv::reporting::debug_output() << "  beta_max: " << cap_coeffs.coeffs.aluminum.beta_max << std::endl;
                                         }
                                     }
                                     
@@ -1160,7 +2500,7 @@ int main(int argc, char** argv) {
                                     
                                     // Debug: Print stressor result
                                     if (!debug_printed) {
-                                        std::cerr << "  Batch capacitor stressor: " << batch_capacitor_stressor << std::endl;
+                                        tracepv::reporting::debug_output() << "  Batch capacitor stressor: " << batch_capacitor_stressor << std::endl;
                                         debug_printed = true;
                                     }
                                     
@@ -1199,14 +2539,16 @@ int main(int argc, char** argv) {
                                 static bool skip_debug_printed = false;
                                 if (!skip_debug_printed) {
                                     if (sim_model.capacitor_part_number.empty()) {
-                                        std::cerr << "DEBUG: Capacitor calculation skipped - part number is empty" << std::endl;
+                                        tracepv::reporting::debug_output() << "DEBUG: Capacitor calculation skipped - part number is empty" << std::endl;
                                     }
                                     if (batch_capacitor_hotspot_temps.empty()) {
-                                        std::cerr << "DEBUG: Capacitor calculation skipped - batch_capacitor_hotspot_temps is empty" << std::endl;
+                                        tracepv::reporting::debug_output() << "DEBUG: Capacitor calculation skipped - batch_capacitor_hotspot_temps is empty" << std::endl;
                                     }
                                     skip_debug_printed = true;
                                 }
                             }
+                            thread_profile.capacitor_reliability +=
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - capacitor_reliability_start).count();
                                 
                                 // Collect internal temperatures for PCB reliability analysis and IGBT Arrhenius model
                                 for (size_t case_idx = 0; case_idx < batch_internal_temps.size(); ++case_idx) {
@@ -1228,6 +2570,23 @@ int main(int argc, char** argv) {
                             
                             thread_simulation_time += batch_outputs.elapsed_s;
                             thread_cases_processed += static_cast<int>(params_batch.size());
+                            #pragma omp critical(tracepv_progress_output)
+                            {
+                                cases_reported_in_round += static_cast<int>(params_batch.size());
+                                std::cout << "TRACEPV_PROGRESS iteration=" << mission_profile_iteration
+                                          << " round=" << (round + 1) << "/" << options.num_rounds
+                                          << " pass=" << round_attempt
+                                          << " processed=" << std::min(cases_reported_in_round, round_cases)
+                                          << " total=" << round_cases << std::endl;
+                            }
+                            for (int loaded_idx : loaded_cache_indices) {
+                                if (loaded_idx >= 0 &&
+                                    loaded_idx < static_cast<int>(stored_electrical_results.size())) {
+                                    release_stored_reference_payload(
+                                        stored_electrical_results[static_cast<std::size_t>(loaded_idx)]);
+                                }
+                            }
+                            release_batch_memory(batch_outputs, params_batch);
                         }
                         
                         // Perform rainflow counting and reliability analysis for IGBT and PCB
@@ -1235,17 +2594,19 @@ int main(int argc, char** argv) {
                         
                         // 5.2 IGBT Reliability: Two failure mechanisms
                         // 5.2.1 DeltaT model: Rainflow counting on junction temperatures
+                        const auto igbt_reliability_start = std::chrono::steady_clock::now();
                         if (!accumulated_junction_temps.empty() && !sim_model.power_module_part_number.empty()) {
                             PowerModuleCoefficients pm_coeffs;
                             if (component_db.load_power_module(sim_model.power_module_part_number, pm_coeffs)) {
+                                if (reference_post_processing) {
                                 // Debug: Print IGBT junction temperature statistics
                                 static bool igbt_rainflow_debug_printed = false;
                                 if (!igbt_rainflow_debug_printed) {
-                                    std::cerr << "DEBUG: IGBT Reliability Analysis:" << std::endl;
-                                    std::cerr << "  Accumulated junction temps: " << accumulated_junction_temps.size() << " points" << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: IGBT Reliability Analysis:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Accumulated junction temps: " << accumulated_junction_temps.size() << " points" << std::endl;
                                     if (!accumulated_junction_temps.empty()) {
                                         auto minmax = std::minmax_element(accumulated_junction_temps.begin(), accumulated_junction_temps.end());
-                                        std::cerr << "  Junction temp range: [" << *minmax.first << ", " << *minmax.second << "] C" << std::endl;
+                                        tracepv::reporting::debug_output() << "  Junction temp range: [" << *minmax.first << ", " << *minmax.second << "] C" << std::endl;
                                     }
                                     igbt_rainflow_debug_printed = true;
                                 }
@@ -1260,14 +2621,14 @@ int main(int argc, char** argv) {
                                 // Debug: Print rainflow counting results
                                 static bool igbt_rainflow_result_debug_printed = false;
                                 if (!igbt_rainflow_result_debug_printed) {
-                                    std::cerr << "DEBUG: IGBT Rainflow Counting Results:" << std::endl;
-                                    std::cerr << "  Tj_max: " << rainflow_result.Tj_max << " C" << std::endl;
-                                    std::cerr << "  Number of cycles: " << rainflow_result.delta_range.size() << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: IGBT Rainflow Counting Results:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Tj_max: " << rainflow_result.Tj_max << " C" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Number of cycles: " << rainflow_result.delta_range.size() << std::endl;
                                     if (!rainflow_result.delta_range.empty()) {
-                                        std::cerr << "  First few cycles:" << std::endl;
+                                        tracepv::reporting::debug_output() << "  First few cycles:" << std::endl;
                                         size_t num_to_print = std::min(size_t(5), rainflow_result.delta_range.size());
                                         for (size_t i = 0; i < num_to_print; ++i) {
-                                            std::cerr << "    Cycle " << i << ": deltaT=" << rainflow_result.delta_range[i] 
+                                            tracepv::reporting::debug_output() << "    Cycle " << i << ": deltaT=" << rainflow_result.delta_range[i]
                                                       << " C, cycles=" << rainflow_result.delta_cycle[i] << std::endl;
                                         }
                                     }
@@ -1311,14 +2672,14 @@ int main(int argc, char** argv) {
                                                 
                                                 // Debug: Print first few deltaT calculations
                                                 if (!igbt_deltat_debug_printed && i < 5) {
-                                                    std::cerr << "DEBUG: IGBT DeltaT Model Calculation (Cycle " << i << "):" << std::endl;
-                                                    std::cerr << "  deltaT: " << deltaT << " C" << std::endl;
-                                                    std::cerr << "  Tj_begin: " << Tj_begin << " C" << std::endl;
-                                                    std::cerr << "  Tj_end: " << Tj_end << " C" << std::endl;
-                                                    std::cerr << "  Tj_max: " << Tj_max << " C" << std::endl;
-                                                    std::cerr << "  cycles: " << cycles << std::endl;
-                                                    std::cerr << "  Nf: " << Nf << std::endl;
-                                                    std::cerr << "  stressor (cycles/Nf): " << cycle_stressor << std::endl;
+                                                    tracepv::reporting::debug_output() << "DEBUG: IGBT DeltaT Model Calculation (Cycle " << i << "):" << std::endl;
+                                                    tracepv::reporting::debug_output() << "  deltaT: " << deltaT << " C" << std::endl;
+                                                    tracepv::reporting::debug_output() << "  Tj_begin: " << Tj_begin << " C" << std::endl;
+                                                    tracepv::reporting::debug_output() << "  Tj_end: " << Tj_end << " C" << std::endl;
+                                                    tracepv::reporting::debug_output() << "  Tj_max: " << Tj_max << " C" << std::endl;
+                                                    tracepv::reporting::debug_output() << "  cycles: " << cycles << std::endl;
+                                                    tracepv::reporting::debug_output() << "  Nf: " << Nf << std::endl;
+                                                    tracepv::reporting::debug_output() << "  stressor (cycles/Nf): " << cycle_stressor << std::endl;
                                                     if (i == 4) igbt_deltat_debug_printed = true;
                                                 }
                                             }
@@ -1326,7 +2687,7 @@ int main(int argc, char** argv) {
                                     }
                                     
                                     if (!igbt_deltat_debug_printed) {
-                                        std::cerr << "DEBUG: IGBT DeltaT Model Total Stressor: " << total_deltaT_stressor << std::endl;
+                                        tracepv::reporting::debug_output() << "DEBUG: IGBT DeltaT Model Total Stressor: " << total_deltaT_stressor << std::endl;
                                         igbt_deltat_debug_printed = true;
                                     }
                                     
@@ -1387,6 +2748,7 @@ int main(int argc, char** argv) {
                                         }
                                     }
                                 }
+                                }
                                 
                                 // 5.2.2 Arrhenius model: Calculate stressor from internal temperatures
                                 // For each 5-minute interval, calculate lifetime and stressor
@@ -1421,12 +2783,12 @@ int main(int argc, char** argv) {
                                         
                                         // Debug: Print first few Arrhenius calculations
                                         if (!igbt_arrhenius_debug_printed && i < 5) {
-                                            std::cerr << "DEBUG: IGBT Arrhenius Model Calculation (Interval " << i << "):" << std::endl;
-                                            std::cerr << "  T_internal: " << T_internal << " C" << std::endl;
-                                            std::cerr << "  RH: " << rh << " %" << std::endl;
-                                            std::cerr << "  Voltage: " << voltage << " V" << std::endl;
-                                            std::cerr << "  Lifetime: " << lifetime << " hours" << std::endl;
-                                            std::cerr << "  Stressor (5 min / lifetime*60): " << interval_stressor << std::endl;
+                                            tracepv::reporting::debug_output() << "DEBUG: IGBT Arrhenius Model Calculation (Interval " << i << "):" << std::endl;
+                                            tracepv::reporting::debug_output() << "  T_internal: " << T_internal << " C" << std::endl;
+                                            tracepv::reporting::debug_output() << "  RH: " << rh << " %" << std::endl;
+                                            tracepv::reporting::debug_output() << "  Voltage: " << voltage << " V" << std::endl;
+                                            tracepv::reporting::debug_output() << "  Lifetime: " << lifetime << " hours" << std::endl;
+                                            tracepv::reporting::debug_output() << "  Stressor (5 min / lifetime*60): " << interval_stressor << std::endl;
                                             if (i == 4) igbt_arrhenius_debug_printed = true;
                                         }
                                     }
@@ -1458,54 +2820,58 @@ int main(int argc, char** argv) {
                                 }
                                 
                                 if (!igbt_arrhenius_debug_printed) {
-                                    std::cerr << "DEBUG: IGBT Arrhenius Model Total Stressor: " << total_arrhenius_stressor << std::endl;
-                                    std::cerr << "DEBUG: IGBT Arrhenius Model - Processed " << accumulated_internal_temps.size() << " intervals" << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: IGBT Arrhenius Model Total Stressor: " << total_arrhenius_stressor << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: IGBT Arrhenius Model - Processed " << accumulated_internal_temps.size() << " intervals" << std::endl;
                                     igbt_arrhenius_debug_printed = true;
                                 }
                             } else {
                                 static bool igbt_load_error_printed = false;
                                 if (!igbt_load_error_printed) {
-                                    std::cerr << "DEBUG: Failed to load IGBT power module: " << sim_model.power_module_part_number << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: Failed to load IGBT power module: " << sim_model.power_module_part_number << std::endl;
                                     igbt_load_error_printed = true;
                                 }
                             }
                         }
+                        thread_profile.igbt_reliability +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - igbt_reliability_start).count();
                         
                         // 5.4 PCB Reliability: Rainflow counting on internal temperatures
-                        if (!accumulated_internal_temps.empty() && !sim_model.pcb_part_number.empty()) {
+                        const auto pcb_reliability_start = std::chrono::steady_clock::now();
+                        if (reference_post_processing &&
+                            !accumulated_internal_temps.empty() && !sim_model.pcb_part_number.empty()) {
                             PCBParameters pcb_params;
                             if (component_db.load_pcb(sim_model.pcb_part_number, pcb_params)) {
                                 // Debug: Print PCB parameters
                                 static bool pcb_params_debug_printed = false;
                                 if (!pcb_params_debug_printed) {
-                                    std::cerr << "DEBUG: PCB Reliability Analysis:" << std::endl;
-                                    std::cerr << "  Part number: " << sim_model.pcb_part_number << std::endl;
-                                    std::cerr << "  Component type: " << pcb_params.component_type << std::endl;
-                                    std::cerr << "  Material: " << pcb_params.material << std::endl;
-                                    std::cerr << "  Component dimensions (l x w x h): " << pcb_params.component_dims.length 
+                                    tracepv::reporting::debug_output() << "DEBUG: PCB Reliability Analysis:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Part number: " << sim_model.pcb_part_number << std::endl;
+                                    tracepv::reporting::debug_output() << "  Component type: " << pcb_params.component_type << std::endl;
+                                    tracepv::reporting::debug_output() << "  Material: " << pcb_params.material << std::endl;
+                                    tracepv::reporting::debug_output() << "  Component dimensions (l x w x h): " << pcb_params.component_dims.length
                                               << " x " << pcb_params.component_dims.width 
                                               << " x " << pcb_params.component_dims.thickness << " mm" << std::endl;
-                                    std::cerr << "  Copper dimensions (l x w x h): " << pcb_params.copper_dims.length 
+                                    tracepv::reporting::debug_output() << "  Copper dimensions (l x w x h): " << pcb_params.copper_dims.length
                                               << " x " << pcb_params.copper_dims.width 
                                               << " x " << pcb_params.copper_dims.thickness << " mm" << std::endl;
-                                    std::cerr << "  Solder dimensions (l x w x h): " << pcb_params.solder_dims.length 
+                                    tracepv::reporting::debug_output() << "  Solder dimensions (l x w x h): " << pcb_params.solder_dims.length
                                               << " x " << pcb_params.solder_dims.width 
                                               << " x " << pcb_params.solder_dims.thickness << " mm" << std::endl;
-                                    std::cerr << "  CTE_component: " << std::scientific << pcb_params.CTE_component << " 1/K" << std::endl;
-                                    std::cerr << "  CTE_FR4: " << std::scientific << pcb_params.CTE_FR4 << " 1/K" << std::endl;
-                                    std::cerr << "  d_CTE: " << std::scientific << (pcb_params.CTE_component - pcb_params.CTE_FR4) << " 1/K" << std::endl;
-                                    std::cerr << "  PCB thickness: " << std::fixed << pcb_params.pcb_thickness << " mm" << std::endl;
-                                    std::cerr << "  E_comp: " << std::fixed << 310000.0 << " Pa" << std::endl;
-                                    std::cerr << "  E_FR4: " << std::fixed << pcb_params.E_FR4 << " Pa" << std::endl;
-                                    std::cerr << "  G_solder: " << std::fixed << pcb_params.shear_modulus << " Pa" << std::endl;
-                                    std::cerr << "  G_copper: " << std::fixed << pcb_params.G_copper << " Pa" << std::endl;
-                                    std::cerr << "  G_FR4: " << std::fixed << pcb_params.G_FR4 << " Pa" << std::endl;
-                                    std::cerr << "  Poisson_FR4: " << std::fixed << pcb_params.Poisson_FR4 << std::endl;
-                                    std::cerr << "  Adjust param: " << std::fixed << pcb_params.adjust_param << std::endl;
-                                    std::cerr << "  Accumulated internal temps: " << accumulated_internal_temps.size() << " points" << std::endl;
+                                    tracepv::reporting::debug_output() << "  CTE_component: " << std::scientific << pcb_params.CTE_component << " 1/K" << std::endl;
+                                    tracepv::reporting::debug_output() << "  CTE_FR4: " << std::scientific << pcb_params.CTE_FR4 << " 1/K" << std::endl;
+                                    tracepv::reporting::debug_output() << "  d_CTE: " << std::scientific << (pcb_params.CTE_component - pcb_params.CTE_FR4) << " 1/K" << std::endl;
+                                    tracepv::reporting::debug_output() << "  PCB thickness: " << std::fixed << pcb_params.pcb_thickness << " mm" << std::endl;
+                                    tracepv::reporting::debug_output() << "  E_comp: " << std::fixed << 310000.0 << " Pa" << std::endl;
+                                    tracepv::reporting::debug_output() << "  E_FR4: " << std::fixed << pcb_params.E_FR4 << " Pa" << std::endl;
+                                    tracepv::reporting::debug_output() << "  G_solder: " << std::fixed << pcb_params.shear_modulus << " Pa" << std::endl;
+                                    tracepv::reporting::debug_output() << "  G_copper: " << std::fixed << pcb_params.G_copper << " Pa" << std::endl;
+                                    tracepv::reporting::debug_output() << "  G_FR4: " << std::fixed << pcb_params.G_FR4 << " Pa" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Poisson_FR4: " << std::fixed << pcb_params.Poisson_FR4 << std::endl;
+                                    tracepv::reporting::debug_output() << "  Adjust param: " << std::fixed << pcb_params.adjust_param << std::endl;
+                                    tracepv::reporting::debug_output() << "  Accumulated internal temps: " << accumulated_internal_temps.size() << " points" << std::endl;
                                     if (!accumulated_internal_temps.empty()) {
                                         auto minmax = std::minmax_element(accumulated_internal_temps.begin(), accumulated_internal_temps.end());
-                                        std::cerr << "  Internal temp range: [" << std::fixed << *minmax.first << ", " << *minmax.second << "] C" << std::endl;
+                                        tracepv::reporting::debug_output() << "  Internal temp range: [" << std::fixed << *minmax.first << ", " << *minmax.second << "] C" << std::endl;
                                     }
                                     pcb_params_debug_printed = true;
                                 }
@@ -1520,15 +2886,15 @@ int main(int argc, char** argv) {
                                 // Debug: Print rainflow counting results
                                 static bool pcb_rainflow_result_debug_printed = false;
                                 if (!pcb_rainflow_result_debug_printed) {
-                                    std::cerr << "DEBUG: PCB Rainflow Counting Results:" << std::endl;
-                                    std::cerr << "  Number of cycles: " << rainflow_result.delta_range.size() << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: PCB Rainflow Counting Results:" << std::endl;
+                                    tracepv::reporting::debug_output() << "  Number of cycles: " << rainflow_result.delta_range.size() << std::endl;
                                     if (!rainflow_result.delta_range.empty()) {
                                         auto minmax_delta = std::minmax_element(rainflow_result.delta_range.begin(), rainflow_result.delta_range.end());
-                                        std::cerr << "  Delta T range: [" << *minmax_delta.first << ", " << *minmax_delta.second << "] C" << std::endl;
-                                        std::cerr << "  First few cycles:" << std::endl;
+                                        tracepv::reporting::debug_output() << "  Delta T range: [" << *minmax_delta.first << ", " << *minmax_delta.second << "] C" << std::endl;
+                                        tracepv::reporting::debug_output() << "  First few cycles:" << std::endl;
                                         size_t num_to_print = std::min(size_t(5), rainflow_result.delta_range.size());
                                         for (size_t i = 0; i < num_to_print; ++i) {
-                                            std::cerr << "    Cycle " << i << ": deltaT=" << rainflow_result.delta_range[i] 
+                                            tracepv::reporting::debug_output() << "    Cycle " << i << ": deltaT=" << rainflow_result.delta_range[i]
                                                       << " C, cycles=" << rainflow_result.delta_cycle[i] << std::endl;
                                         }
                                     }
@@ -1555,9 +2921,9 @@ int main(int argc, char** argv) {
                                         
                                         // Debug: Print first few PCB calculations with detailed intermediate values
                                         if (!pcb_stressor_debug_printed && i < 5) {
-                                            std::cerr << "DEBUG: PCB Stressor Calculation (Cycle " << i << "):" << std::endl;
-                                            std::cerr << "  deltaT: " << std::fixed << std::setprecision(3) << delta_T << " C" << std::endl;
-                                            std::cerr << "  cycles: " << std::fixed << cycles << std::endl;
+                                            tracepv::reporting::debug_output() << "DEBUG: PCB Stressor Calculation (Cycle " << i << "):" << std::endl;
+                                            tracepv::reporting::debug_output() << "  deltaT: " << std::fixed << std::setprecision(3) << delta_T << " C" << std::endl;
+                                            tracepv::reporting::debug_output() << "  cycles: " << std::fixed << cycles << std::endl;
                                             
                                             // Calculate intermediate values for debug output (duplicate calculation for debugging)
                                             double delta_T_abs = std::abs(delta_T);
@@ -1597,27 +2963,27 @@ int main(int argc, char** argv) {
                                             double dW_SE = Tau_SE * d_strain_SE;
                                             double adjust_param = pcb_params.adjust_param;
                                             
-                                            std::cerr << "  Ld_SE: " << std::scientific << std::setprecision(6) << Ld_SE << " mm" << std::endl;
-                                            std::cerr << "  A_SE: " << std::scientific << A_SE << " mm^2" << std::endl;
-                                            std::cerr << "  A1_SE: " << std::scientific << A1_SE << " mm^2" << std::endl;
-                                            std::cerr << "  A2_SE: " << std::scientific << A2_SE << " mm^2" << std::endl;
-                                            std::cerr << "  As_SE: " << std::scientific << As_SE << " mm^2" << std::endl;
-                                            std::cerr << "  d_strain_SE: " << std::scientific << d_strain_SE << std::endl;
-                                            std::cerr << "  Fnum_SE: " << std::scientific << Fnum_SE << " N" << std::endl;
-                                            std::cerr << "  Fden_SE: " << std::scientific << Fden_SE << " m/N" << std::endl;
-                                            std::cerr << "  F: " << std::scientific << F << " N" << std::endl;
-                                            std::cerr << "  Tau_SE: " << std::scientific << Tau_SE << " Pa" << std::endl;
-                                            std::cerr << "  dW_SE: " << std::scientific << dW_SE << " J/m^3" << std::endl;
-                                            std::cerr << "  adjust_param * dW_SE / 5920: " << std::scientific << (adjust_param * dW_SE / 5920.0) << std::endl;
-                                            std::cerr << "  Nf: " << std::scientific << Nf << " cycles to failure" << std::endl;
-                                            std::cerr << "  stressor (cycles/Nf): " << std::scientific << cycle_stressor << std::endl;
+                                            tracepv::reporting::debug_output() << "  Ld_SE: " << std::scientific << std::setprecision(6) << Ld_SE << " mm" << std::endl;
+                                            tracepv::reporting::debug_output() << "  A_SE: " << std::scientific << A_SE << " mm^2" << std::endl;
+                                            tracepv::reporting::debug_output() << "  A1_SE: " << std::scientific << A1_SE << " mm^2" << std::endl;
+                                            tracepv::reporting::debug_output() << "  A2_SE: " << std::scientific << A2_SE << " mm^2" << std::endl;
+                                            tracepv::reporting::debug_output() << "  As_SE: " << std::scientific << As_SE << " mm^2" << std::endl;
+                                            tracepv::reporting::debug_output() << "  d_strain_SE: " << std::scientific << d_strain_SE << std::endl;
+                                            tracepv::reporting::debug_output() << "  Fnum_SE: " << std::scientific << Fnum_SE << " N" << std::endl;
+                                            tracepv::reporting::debug_output() << "  Fden_SE: " << std::scientific << Fden_SE << " m/N" << std::endl;
+                                            tracepv::reporting::debug_output() << "  F: " << std::scientific << F << " N" << std::endl;
+                                            tracepv::reporting::debug_output() << "  Tau_SE: " << std::scientific << Tau_SE << " Pa" << std::endl;
+                                            tracepv::reporting::debug_output() << "  dW_SE: " << std::scientific << dW_SE << " J/m^3" << std::endl;
+                                            tracepv::reporting::debug_output() << "  adjust_param * dW_SE / 5920: " << std::scientific << (adjust_param * dW_SE / 5920.0) << std::endl;
+                                            tracepv::reporting::debug_output() << "  Nf: " << std::scientific << Nf << " cycles to failure" << std::endl;
+                                            tracepv::reporting::debug_output() << "  stressor (cycles/Nf): " << std::scientific << cycle_stressor << std::endl;
                                             if (i == 4) pcb_stressor_debug_printed = true;
                                         }
                                     }
                                 }
                                 
                                 if (!pcb_stressor_debug_printed) {
-                                    std::cerr << "DEBUG: PCB Total Stressor: " << total_pcb_stressor << std::endl;
+                                    tracepv::reporting::debug_output() << "DEBUG: PCB Total Stressor: " << total_pcb_stressor << std::endl;
                                     pcb_stressor_debug_printed = true;
                                 }
                                 
@@ -1654,19 +3020,21 @@ int main(int argc, char** argv) {
                                 static bool pcb_skip_debug_printed = false;
                                 if (!pcb_skip_debug_printed) {
                                     if (sim_model.pcb_part_number.empty()) {
-                                        std::cerr << "DEBUG: PCB calculation skipped - part number is empty" << std::endl;
+                                        tracepv::reporting::debug_output() << "DEBUG: PCB calculation skipped - part number is empty" << std::endl;
                                     } else if (accumulated_internal_temps.empty()) {
-                                        std::cerr << "DEBUG: PCB calculation skipped - accumulated_internal_temps is empty" << std::endl;
+                                        tracepv::reporting::debug_output() << "DEBUG: PCB calculation skipped - accumulated_internal_temps is empty" << std::endl;
                                     } else {
                                         PCBParameters pcb_params_check;
                                         if (!component_db.load_pcb(sim_model.pcb_part_number, pcb_params_check)) {
-                                            std::cerr << "DEBUG: PCB calculation skipped - failed to load PCB: " << sim_model.pcb_part_number << std::endl;
+                                            tracepv::reporting::debug_output() << "DEBUG: PCB calculation skipped - failed to load PCB: " << sim_model.pcb_part_number << std::endl;
                                         }
                                     }
                                     pcb_skip_debug_printed = true;
                                 }
                             }
                         }
+                        thread_profile.pcb_reliability +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - pcb_reliability_start).count();
                         
                         // Accumulate results (thread-safe with critical section)
                         #pragma omp critical
@@ -1675,6 +3043,30 @@ int main(int argc, char** argv) {
                             iteration_gpu_simulation_times[cpu_thread_id] += thread_simulation_time;
                             cases_processed_in_round += thread_cases_processed;
                             total_cases_processed += thread_cases_processed;
+                            profiling_totals.electrical_gpu += thread_profile.electrical_gpu;
+                            profiling_totals.stress_loss_thermal += thread_profile.stress_loss_thermal;
+                            profiling_totals.stress_calculation += thread_profile.stress_calculation;
+                            profiling_totals.capacitor_loss += thread_profile.capacitor_loss;
+                            profiling_totals.power_module_loss += thread_profile.power_module_loss;
+                            profiling_totals.capacitor_thermal += thread_profile.capacitor_thermal;
+                            profiling_totals.capacitor_ref_harmonic += thread_profile.capacitor_ref_harmonic;
+                            profiling_totals.capacitor_ref_esr_grid += thread_profile.capacitor_ref_esr_grid;
+                            profiling_totals.capacitor_ref_loss_grid += thread_profile.capacitor_ref_loss_grid;
+                            profiling_totals.capacitor_ref_polyfit += thread_profile.capacitor_ref_polyfit;
+                            profiling_totals.capacitor_ref_iteration += thread_profile.capacitor_ref_iteration;
+                            profiling_totals.capacitor_fallback_static += thread_profile.capacitor_fallback_static;
+                            profiling_totals.igbt_thermal += thread_profile.igbt_thermal;
+                            profiling_totals.igbt_parameter_lookup += thread_profile.igbt_parameter_lookup;
+                            profiling_totals.igbt_input_build += thread_profile.igbt_input_build;
+                            profiling_totals.igbt_loss_igbt1 += thread_profile.igbt_loss_igbt1;
+                            profiling_totals.igbt_loss_igbt2 += thread_profile.igbt_loss_igbt2;
+                            profiling_totals.igbt_loss_diode1 += thread_profile.igbt_loss_diode1;
+                            profiling_totals.igbt_loss_diode2 += thread_profile.igbt_loss_diode2;
+                            profiling_totals.igbt_thermal_rc += thread_profile.igbt_thermal_rc;
+                            profiling_totals.fan_reliability += thread_profile.fan_reliability;
+                            profiling_totals.capacitor_reliability += thread_profile.capacitor_reliability;
+                            profiling_totals.igbt_reliability += thread_profile.igbt_reliability;
+                            profiling_totals.pcb_reliability += thread_profile.pcb_reliability;
                         }
                         
                         // Accumulate stressors from this thread (thread-safe)
@@ -1695,7 +3087,7 @@ int main(int argc, char** argv) {
                             round_pcb_degradation += pcb_degradation;
                             
                             // Check if any accumulated stressor >= 1.0 (early termination)
-                            if (!round_terminated_early && 
+                            if (!round_terminated_early.load(std::memory_order_relaxed) &&
                                 (round_fan_stressor_electrical_external >= 1.0 ||
                                  round_fan_stressor_electrical_internal >= 1.0 ||
                                  round_fan_stressor_mechanical_external >= 1.0 ||
@@ -1704,7 +3096,7 @@ int main(int argc, char** argv) {
                                  round_igbt_stressor_deltaT >= 1.0 ||
                                  round_igbt_stressor_arrhenius >= 1.0 ||
                                  round_pcb_degradation >= 1.0)) {
-                                round_terminated_early = true;
+                                round_terminated_early.store(true, std::memory_order_relaxed);
                             }
                         }
                         
@@ -1716,6 +3108,24 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            }
+
+            if (!reuse_round_cache) {
+                RoundStressorTotals cached_totals;
+                cached_totals.fan_electrical_external = round_fan_stressor_electrical_external;
+                cached_totals.fan_electrical_internal = round_fan_stressor_electrical_internal;
+                cached_totals.fan_mechanical_external = round_fan_stressor_mechanical_external;
+                cached_totals.fan_mechanical_internal = round_fan_stressor_mechanical_internal;
+                cached_totals.capacitor = round_capacitor_stressor;
+                cached_totals.igbt_deltaT = round_igbt_stressor_deltaT;
+                cached_totals.igbt_arrhenius = round_igbt_stressor_arrhenius;
+                cached_totals.pcb = round_pcb_degradation;
+                round_cache.valid = true;
+                round_cache.parameter_state = round_parameter_state;
+                round_cache.totals = cached_totals;
+                round_cache.records = round_stressor_records;
+                round_cache.cases_processed = cases_processed_in_round;
+            }
             
             // Check if any accumulated stressor >= 1.0 (early termination for round)
             if (round_fan_stressor_electrical_external >= 1.0 ||
@@ -1726,7 +3136,7 @@ int main(int argc, char** argv) {
                 round_igbt_stressor_deltaT >= 1.0 ||
                 round_igbt_stressor_arrhenius >= 1.0 ||
                 round_pcb_degradation >= 1.0) {
-                round_terminated_early = true;
+                round_terminated_early.store(true, std::memory_order_relaxed);
                 std::cout << "\nEarly termination: Accumulated stressor >= 1.0 detected in round " 
                           << (round + 1) << std::endl;
             }
@@ -1734,6 +3144,7 @@ int main(int argc, char** argv) {
             case_index += round_cases;
             
             // Write stressors to CSV file after each round
+            const auto stressor_csv_start = std::chrono::steady_clock::now();
             int current_round = round;  // Capture round value to avoid potential naming conflicts
             std::string csv_filename = "results/stressor_round_" + std::to_string(current_round + 1) + 
                                       "_iteration_" + std::to_string(mission_profile_iteration) + ".csv";
@@ -1771,7 +3182,9 @@ int main(int argc, char** argv) {
             } else {
                 std::cerr << "  Warning: Failed to open CSV file for writing: " << csv_filename << std::endl;
             }
-            
+            profiling_totals.stressor_csv +=
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - stressor_csv_start).count();
+
             // Accumulate round stressors to iteration totals
             iteration_fan_stressor_electrical_external += round_fan_stressor_electrical_external;
             iteration_fan_stressor_electrical_internal += round_fan_stressor_electrical_internal;
@@ -1781,10 +3194,200 @@ int main(int argc, char** argv) {
             iteration_igbt_stressor_deltaT += round_igbt_stressor_deltaT;
             iteration_igbt_stressor_arrhenius += round_igbt_stressor_arrhenius;
             iteration_pcb_degradation += round_pcb_degradation;
+
+            // Account only for accepted reliability work. Cached rounds represent
+            // new exposure; a thermal-only refresh below does not add exposure.
+            // Existing reliability kernels treat each processed case as 5 minutes.
+            run_report.accepted_case_count +=
+                static_cast<std::uint64_t>(cases_processed_in_round);
+            run_report.represented_exposure_hours =
+                static_cast<double>(run_report.accepted_case_count) * 5.0 / 60.0;
+            const DegradationValues accepted_damage = current_degradation_values();
+            for (std::size_t mode = 0; mode < accepted_damage.size(); ++mode) {
+                if (std::isfinite(accepted_damage[mode]) && accepted_damage[mode] >= 1.0 &&
+                    !run_report.first_failure_boundary_hours[mode]) {
+                    run_report.first_failure_boundary_hours[mode] =
+                        run_report.represented_exposure_hours;
+                }
+            }
+
+            const DegradationParameterState after_round_parameter_state = current_parameter_state();
+            if (parameter_state_exceeds(after_round_parameter_state, round_parameter_state)) {
+                const bool capacitor_thermal_bucket_changed =
+                    after_round_parameter_state[4] > round_parameter_state[4];
+                const int previous_igbt_thermal_bucket =
+                    std::max(round_parameter_state[5], round_parameter_state[6]);
+                const int updated_igbt_thermal_bucket =
+                    std::max(after_round_parameter_state[5], after_round_parameter_state[6]);
+                const bool igbt_thermal_bucket_changed =
+                    updated_igbt_thermal_bucket > previous_igbt_thermal_bucket;
+                const bool thermal_parameter_changed =
+                    capacitor_thermal_bucket_changed || igbt_thermal_bucket_changed;
+
+                std::cout << "TRACEPV_CRITICAL_DEGRADATION iteration="
+                          << mission_profile_iteration
+                          << " round=" << (round + 1) << "/" << options.num_rounds
+                          << " critical_step_percent="
+                          << static_cast<int>(std::lround(kCriticalDegradationStep * 100.0))
+                          << std::endl;
+                std::cout << "\nDegradation bucket crossed in round " << (round + 1)
+                          << ": "
+                          << describe_bucket_crossing(round_parameter_state, after_round_parameter_state)
+                          << ". Keeping the completed electrical and reliability results; "
+                          << (thermal_parameter_changed
+                                  ? "updating only the affected thermal outputs."
+                                  : "no capacitor or IGBT thermal parameter changed.")
+                          << std::endl;
+
+                if (thermal_parameter_changed) {
+                thermal_action = "rerun";
+                std::cout << "TRACEPV_THERMAL action=rerun"
+                          << " iteration=" << mission_profile_iteration
+                          << " round=" << (round + 1) << "/" << options.num_rounds
+                          << " pass=" << round_attempt
+                          << " critical_step_percent="
+                          << static_cast<int>(std::lround(kCriticalDegradationStep * 100.0))
+                          << std::endl;
+
+                const double updated_capacitor_thermal_resistance_scale =
+                    1.0 + static_cast<double>(after_round_parameter_state[4]) *
+                              kCriticalDegradationStep;
+                const double updated_igbt_thermal_resistance_scale =
+                    1.0 + static_cast<double>(updated_igbt_thermal_bucket) *
+                              kCriticalDegradationStep;
+
+                CapacitorCoefficients updated_cap_coeffs;
+                CapacitorType updated_cap_type;
+                std::string updated_cap_voltage_type;
+                bool updated_cap_coeffs_loaded = false;
+                if (!sim_model.capacitor_part_number.empty()) {
+                    updated_cap_coeffs_loaded = component_db.load_capacitor(
+                        sim_model.capacitor_part_number,
+                        updated_cap_coeffs,
+                        updated_cap_type,
+                        updated_cap_voltage_type);
+                }
+                const double updated_rth_amb =
+                    (updated_cap_coeffs_loaded ? updated_cap_coeffs.rth_amb : 0.5) *
+                    updated_capacitor_thermal_resistance_scale;
+                const double updated_rth_surf =
+                    (updated_cap_coeffs_loaded ? updated_cap_coeffs.rth_surf : 0.3) *
+                    updated_capacitor_thermal_resistance_scale;
+                const double igbt_scale_ratio =
+                    updated_igbt_thermal_resistance_scale /
+                    std::max(1e-12, igbt_thermal_resistance_scale);
+                const int round_start_case = case_index - round_cases;
+                for (int i = round_start_case; i < case_index; ++i) {
+                    const std::size_t idx = static_cast<std::size_t>(i);
+                    if (validation_case_processed[idx] == 0) {
+                        continue;
+                    }
+                    if (capacitor_thermal_bucket_changed) {
+                        const CapacitorThermalResult updated_capacitor_thermal =
+                            calculate_capacitor_thermal(
+                                validation_capacitor_loss[idx],
+                                validation_internal_temperature[idx],
+                                updated_rth_amb,
+                                updated_rth_surf);
+                        validation_capacitor_hotspot[idx] =
+                            updated_capacitor_thermal.capacitor_hotspot_temperature;
+                        validation_capacitor_surface[idx] =
+                            updated_capacitor_thermal.capacitor_surface_temperature;
+                        validation_reference_model_used[idx] = 0;
+                        if (model_validation_enabled) {
+                            model_validation_records[idx].capacitor_surface_temperature_c =
+                                validation_capacitor_surface[idx];
+                            model_validation_records[idx].capacitor_hotspot_temperature_c =
+                                validation_capacitor_hotspot[idx];
+                            model_validation_records[idx].capacitor_reference_temperature_used = false;
+                            model_validation_records[idx].capacitor_temperature_adjusted_after_degradation = true;
+                        }
+                    }
+
+                    if (igbt_thermal_bucket_changed) {
+                        const double ambient = all_cases[idx].ambient_temperature;
+                        validation_igbt_junction[idx] =
+                            ambient +
+                            (validation_igbt_junction[idx] - ambient) * igbt_scale_ratio;
+                        if (model_validation_enabled) {
+                            model_validation_records[idx].igbt_junction_temperature_c =
+                                validation_igbt_junction[idx];
+                            model_validation_records[idx].igbt_reference_temperature_used = false;
+                            model_validation_records[idx].igbt_temperature_adjusted_after_degradation = true;
+                        }
+                    }
+                }
+
+                std::cout << "TRACEPV_THERMAL_COMPLETE"
+                          << " iteration=" << mission_profile_iteration
+                          << " round=" << (round + 1) << "/" << options.num_rounds
+                          << " capacitor_rth_scale="
+                          << updated_capacitor_thermal_resistance_scale
+                          << " igbt_rth_scale=" << updated_igbt_thermal_resistance_scale
+                          << " electrical_reused=true reliability_results_preserved=true"
+                          << std::endl;
+                }
+            }
+
+            // Write the accepted thermal state after any thermal-only rerun so
+            // validation exports always contain the latest temperatures.
+            const std::string thermal_csv_filename =
+                "results/capacitor_thermal_round_" + std::to_string(current_round + 1) +
+                "_iteration_" + std::to_string(mission_profile_iteration) + ".csv";
+            std::ofstream thermal_csv(thermal_csv_filename);
+            if (thermal_csv.is_open()) {
+                thermal_csv
+                    << "case_index,time,ambient_temperature,internal_temperature,ac_power,"
+                       "capacitor_loss,capacitor_surface_temperature,"
+                       "capacitor_hotspot_temperature,igbt_junction_temperature,"
+                       "reference_model_used\n";
+                thermal_csv << std::setprecision(15);
+                const int round_start_case = case_index - round_cases;
+                for (int i = round_start_case; i < case_index; ++i) {
+                    const std::size_t idx = static_cast<std::size_t>(i);
+                    if (validation_case_processed[idx] == 0) {
+                        continue;
+                    }
+                    thermal_csv << i << "," << all_cases[idx].time << ","
+                                << all_cases[idx].ambient_temperature << ","
+                                << validation_internal_temperature[idx] << ","
+                                << validation_ac_power[idx] << ","
+                                << validation_capacitor_loss[idx] << ","
+                                << validation_capacitor_surface[idx] << ","
+                                << validation_capacitor_hotspot[idx] << ","
+                                << validation_igbt_junction[idx] << ","
+                                << validation_reference_model_used[idx] << "\n";
+                }
+                std::cout << "  Thermal validation data saved to: "
+                          << thermal_csv_filename << std::endl;
+            } else {
+                std::cerr << "  Warning: Failed to write thermal CSV: "
+                          << thermal_csv_filename << std::endl;
+            }
+
+            if (model_validation_enabled) {
+                const std::filesystem::path validation_summary_path =
+                    model_validation_dir /
+                    ("iteration_" + std::to_string(mission_profile_iteration)) /
+                    ("intermediate_summary_round_" +
+                     std::to_string(current_round + 1) + ".csv");
+                const std::size_t summary_begin = static_cast<std::size_t>(
+                    case_index - round_cases);
+                const std::size_t summary_end = static_cast<std::size_t>(case_index);
+                write_model_validation_summary_csv(
+                    validation_summary_path,
+                    all_cases,
+                    model_validation_records,
+                    summary_begin,
+                    summary_end);
+                std::cout << "  Model-validation intermediate summary saved to: "
+                          << validation_summary_path << std::endl;
+            }
             
             // Early termination: break out of round loop if any cumulative iteration stressor >= 1.0
             // Check both round-level (for immediate termination) and iteration-level (cumulative across rounds)
-            bool should_terminate = round_terminated_early;
+            bool should_terminate =
+                round_terminated_early.load(std::memory_order_relaxed);
             if (!should_terminate) {
                 // Check cumulative iteration stressors (including all previous rounds in this iteration)
                 if (iteration_fan_stressor_electrical_external >= 1.0 ||
@@ -1801,17 +3404,13 @@ int main(int argc, char** argv) {
                 }
             }
             
-            if (should_terminate) {
-                break;  // Exit the round loop
-            }
-            
             // Check if any component has exceeded threshold during this iteration
             // (before accumulating to global, check if current iteration + previous global >= 1.0)
             if ((global_igbt_stressor_deltaT + iteration_igbt_stressor_deltaT) >= 1.0) {
-                std::cerr << "DEBUG: IGBT DeltaT stressor will exceed 1.0 after this iteration!" << std::endl;
-                std::cerr << "  Current global: " << global_igbt_stressor_deltaT << std::endl;
-                std::cerr << "  This iteration: " << iteration_igbt_stressor_deltaT << std::endl;
-                std::cerr << "  Total will be: " << (global_igbt_stressor_deltaT + iteration_igbt_stressor_deltaT) << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: IGBT DeltaT stressor will exceed 1.0 after this iteration!" << std::endl;
+                tracepv::reporting::debug_output() << "  Current global: " << global_igbt_stressor_deltaT << std::endl;
+                tracepv::reporting::debug_output() << "  This iteration: " << iteration_igbt_stressor_deltaT << std::endl;
+                tracepv::reporting::debug_output() << "  Total will be: " << (global_igbt_stressor_deltaT + iteration_igbt_stressor_deltaT) << std::endl;
             }
             
             const auto round_end = std::chrono::steady_clock::now();
@@ -1860,7 +3459,39 @@ int main(int argc, char** argv) {
                       << iteration_igbt_stressor_arrhenius << std::endl;
             std::cout << "  PCB: " << std::scientific << std::setprecision(6) 
                       << iteration_pcb_degradation << std::endl;
+            // Atomic machine-readable snapshot. The WebUI only publishes
+            // degradation and thermal state from accepted round snapshots so
+            // all displayed values advance together after a round completes.
+            std::cout << "TRACEPV_ROUND_COMPLETE"
+                      << " iteration=" << mission_profile_iteration
+                      << " round=" << (current_round + 1) << "/" << options.num_rounds
+                      << " pass=" << round_attempt
+                      << " thermal_action=" << thermal_action
+                      << std::scientific << std::setprecision(15)
+                      << " fan_electrical_external="
+                      << (global_fan_stressor_electrical_external + iteration_fan_stressor_electrical_external)
+                      << " fan_electrical_internal="
+                      << (global_fan_stressor_electrical_internal + iteration_fan_stressor_electrical_internal)
+                      << " fan_mechanical_external="
+                      << (global_fan_stressor_mechanical_external + iteration_fan_stressor_mechanical_external)
+                      << " fan_mechanical_internal="
+                      << (global_fan_stressor_mechanical_internal + iteration_fan_stressor_mechanical_internal)
+                      << " capacitor="
+                      << (global_capacitor_stressor + iteration_capacitor_stressor)
+                      << " igbt_delta_t="
+                      << (global_igbt_stressor_deltaT + iteration_igbt_stressor_deltaT)
+                      << " igbt_arrhenius="
+                      << (global_igbt_stressor_arrhenius + iteration_igbt_stressor_arrhenius)
+                      << " pcb="
+                      << (global_pcb_degradation + iteration_pcb_degradation)
+                      << std::endl;
             std::cout << std::endl;
+
+            // Publish the accepted terminal batch before leaving the loop so
+            // the GUI never loses the final round's degradation snapshot.
+            if (should_terminate) {
+                break;
+            }
             }
             
             // Accumulate iteration stressors to global totals (after all rounds complete)
@@ -1880,9 +3511,11 @@ int main(int argc, char** argv) {
             }
             
             // Mark electrical results as stored after first iteration completes
-            if (mission_profile_iteration == 1 && !skip_electrical_simulation) {
+            if (cache_electrical_results && mission_profile_iteration == 1 && !skip_electrical_simulation) {
                 electrical_results_stored = true;
-                std::cout << "Electrical simulation results stored for reuse in subsequent iterations (when iteration <= 10)" << std::endl;
+                std::cout << "Electrical simulation results stored for reuse in all subsequent iterations." << std::endl;
+            } else if (!cache_electrical_results && mission_profile_iteration == 1 && !skip_electrical_simulation) {
+                std::cout << "Electrical simulation result cache disabled for single-iteration run." << std::endl;
             }
             
             const auto iteration_end = std::chrono::steady_clock::now();
@@ -1947,70 +3580,174 @@ int main(int argc, char** argv) {
             std::cout << std::endl;
             
             // Check if any component has reached degradation = 1.0
-            std::cerr << "DEBUG: Checking degradation thresholds:" << std::endl;
-            std::cerr << "  global_igbt_stressor_deltaT: " << global_igbt_stressor_deltaT << std::endl;
-            std::cerr << "  global_igbt_stressor_arrhenius: " << global_igbt_stressor_arrhenius << std::endl;
+            tracepv::reporting::debug_output() << "DEBUG: Checking degradation thresholds:" << std::endl;
+            tracepv::reporting::debug_output() << "  global_igbt_stressor_deltaT: " << global_igbt_stressor_deltaT << std::endl;
+            tracepv::reporting::debug_output() << "  global_igbt_stressor_arrhenius: " << global_igbt_stressor_arrhenius << std::endl;
             
             if (global_fan_stressor_electrical_external >= 1.0) {
                 degradation_reached = true;
                 failed_component = "Cooling Fan (Electrical External)";
-                std::cerr << "DEBUG: Degradation reached - Cooling Fan (Electrical External)" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - Cooling Fan (Electrical External)" << std::endl;
             } else if (global_fan_stressor_electrical_internal >= 1.0) {
                 degradation_reached = true;
                 failed_component = "Cooling Fan (Electrical Internal)";
-                std::cerr << "DEBUG: Degradation reached - Cooling Fan (Electrical Internal)" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - Cooling Fan (Electrical Internal)" << std::endl;
             } else if (global_fan_stressor_mechanical_external >= 1.0) {
                 degradation_reached = true;
                 failed_component = "Cooling Fan (Mechanical External)";
-                std::cerr << "DEBUG: Degradation reached - Cooling Fan (Mechanical External)" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - Cooling Fan (Mechanical External)" << std::endl;
             } else if (global_fan_stressor_mechanical_internal >= 1.0) {
                 degradation_reached = true;
                 failed_component = "Cooling Fan (Mechanical Internal)";
-                std::cerr << "DEBUG: Degradation reached - Cooling Fan (Mechanical Internal)" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - Cooling Fan (Mechanical Internal)" << std::endl;
             } else if (global_capacitor_stressor >= 1.0) {
                 degradation_reached = true;
                 failed_component = "Capacitor";
-                std::cerr << "DEBUG: Degradation reached - Capacitor" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - Capacitor" << std::endl;
             } else if (global_igbt_stressor_deltaT >= 1.0) {
                 degradation_reached = true;
                 failed_component = "IGBT (DeltaT model)";
-                std::cerr << "DEBUG: Degradation reached - IGBT (DeltaT model): " << global_igbt_stressor_deltaT << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - IGBT (DeltaT model): " << global_igbt_stressor_deltaT << std::endl;
             } else if (global_igbt_stressor_arrhenius >= 1.0) {
                 degradation_reached = true;
                 failed_component = "IGBT (Arrhenius model)";
-                std::cerr << "DEBUG: Degradation reached - IGBT (Arrhenius model): " << global_igbt_stressor_arrhenius << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - IGBT (Arrhenius model): " << global_igbt_stressor_arrhenius << std::endl;
             } else if (global_pcb_degradation >= 1.0) {
                 degradation_reached = true;
                 failed_component = "PCB";
-                std::cerr << "DEBUG: Degradation reached - PCB" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: Degradation reached - PCB" << std::endl;
             } else {
-                std::cerr << "DEBUG: No degradation threshold reached yet" << std::endl;
+                tracepv::reporting::debug_output() << "DEBUG: No degradation threshold reached yet" << std::endl;
             }
             
-            if (!degradation_reached) {
+            const bool reached_iteration_limit =
+                !degradation_reached && options.max_iterations > 0 &&
+                mission_profile_iteration >= options.max_iterations;
+
+            if (!degradation_reached && !reached_iteration_limit) {
                 std::cout << "No component has reached degradation = 1.0 yet." << std::endl;
                 std::cout << "Starting next mission profile iteration...\n" << std::endl;
+            } else if (reached_iteration_limit) {
+                std::cout << "No component has reached degradation = 1.0 yet." << std::endl;
+                std::cout << "Max mission profile iterations reached; stopping simulation." << std::endl;
             } else {
                 std::cout << "\n" << std::string(60, '=') << std::endl;
                 std::cout << "FAILURE DETECTED: " << failed_component << " reached degradation = 1.0" << std::endl;
                 std::cout << std::string(60, '=') << std::endl;
             }
         }
+
+        if (model_validation_enabled) {
+            std::vector<std::size_t> missing_waveform_cases;
+            for (std::size_t case_idx = 0;
+                 case_idx < validation_waveform_written.size();
+                 ++case_idx) {
+                if (validation_waveform_selector->contains(case_idx) &&
+                    validation_waveform_written[case_idx] == 0) {
+                    missing_waveform_cases.push_back(case_idx);
+                }
+            }
+            if (!missing_waveform_cases.empty()) {
+                std::cerr << "Warning: " << missing_waveform_cases.size()
+                          << " selected A2S matrix/matrices were not written, usually "
+                             "because early termination occurred before those cases. "
+                             "Missing case indices:";
+                constexpr std::size_t kReportedMissingWaveformLimit = 10;
+                const std::size_t report_count = std::min(
+                    missing_waveform_cases.size(), kReportedMissingWaveformLimit);
+                for (std::size_t i = 0; i < report_count; ++i) {
+                    std::cerr << (i == 0 ? " " : ",") << missing_waveform_cases[i];
+                }
+                if (report_count < missing_waveform_cases.size()) {
+                    std::cerr << ",...";
+                }
+                std::cerr << std::endl;
+            }
+        }
         
         // ====================================================================
         // End of top-level while loop
         // ====================================================================
+
+        const bool stopped_by_iteration_limit =
+            !degradation_reached && options.max_iterations > 0 &&
+            mission_profile_iteration >= options.max_iterations;
         
         std::cout << "\n" << std::string(60, '=') << std::endl;
-        std::cout << "DEGRADATION LIMIT REACHED" << std::endl;
+        if (stopped_by_iteration_limit) {
+            std::cout << "SIMULATION STOPPED: MAX ITERATIONS REACHED" << std::endl;
+        } else {
+            std::cout << "DEGRADATION LIMIT REACHED" << std::endl;
+        }
         std::cout << std::string(60, '=') << std::endl;
-        std::cout << "Failed Component: " << failed_component << std::endl;
+        std::cout << "Failed Component: "
+                  << (stopped_by_iteration_limit ? "None (max iterations reached)" : failed_component)
+                  << std::endl;
         std::cout << "Total Mission Profile Iterations: " << mission_profile_iteration << std::endl;
         std::cout << "Total Rounds: " << (mission_profile_iteration * options.num_rounds) << std::endl;
         std::cout << std::string(60, '=') << std::endl;
         
         const auto total_end = std::chrono::steady_clock::now();
         const double total_duration = std::chrono::duration<double>(total_end - total_start).count();
+        run_report.wall_time_seconds = total_duration;
+        run_report.stop_reason = stopped_by_iteration_limit
+            ? "max_iterations_reached" : "degradation_limit_reached";
+        run_report.accumulated_damage = {
+            global_fan_stressor_electrical_external,
+            global_fan_stressor_electrical_internal,
+            global_fan_stressor_mechanical_external,
+            global_fan_stressor_mechanical_internal,
+            global_capacitor_stressor,
+            global_igbt_stressor_deltaT,
+            global_igbt_stressor_arrhenius,
+            global_pcb_degradation};
+        const auto print_profile_line = [&](const std::string& label, double seconds) {
+            const double pct = total_duration > 0.0 ? (100.0 * seconds / total_duration) : 0.0;
+            std::cout << "  " << std::left << std::setw(30) << label << std::right
+                      << std::fixed << std::setprecision(3) << seconds << " s"
+                      << " (" << std::setprecision(1) << pct << "%)" << std::endl;
+        };
+        const double profiled_time =
+            profiling_totals.static_cache_electrical +
+            profiling_totals.electrical_gpu +
+            profiling_totals.stress_loss_thermal +
+            profiling_totals.fan_reliability +
+            profiling_totals.capacitor_reliability +
+            profiling_totals.igbt_reliability +
+            profiling_totals.pcb_reliability +
+            profiling_totals.stressor_csv;
+
+        std::cout << "\nProfiling Breakdown:" << std::endl;
+        print_profile_line("Static electrical cache", profiling_totals.static_cache_electrical);
+        print_profile_line("Electrical GPU batches", profiling_totals.electrical_gpu);
+        print_profile_line("Stress/Loss/Thermal", profiling_totals.stress_loss_thermal);
+        std::cout << "  Stress/Loss/Thermal detail (included above):" << std::endl;
+        print_profile_line("  Stress calculation", profiling_totals.stress_calculation);
+        print_profile_line("  Capacitor loss", profiling_totals.capacitor_loss);
+        print_profile_line("  Power module loss", profiling_totals.power_module_loss);
+        print_profile_line("  Capacitor thermal", profiling_totals.capacitor_thermal);
+        std::cout << "    Capacitor reference detail (included in Capacitor thermal):" << std::endl;
+        print_profile_line("    Harmonic extraction", profiling_totals.capacitor_ref_harmonic);
+        print_profile_line("    ESR grid", profiling_totals.capacitor_ref_esr_grid);
+        print_profile_line("    Loss grid", profiling_totals.capacitor_ref_loss_grid);
+        print_profile_line("    Polynomial fit", profiling_totals.capacitor_ref_polyfit);
+        print_profile_line("    Thermal iteration", profiling_totals.capacitor_ref_iteration);
+        print_profile_line("    Fallback static thermal", profiling_totals.capacitor_fallback_static);
+        print_profile_line("  IGBT thermal", profiling_totals.igbt_thermal);
+        std::cout << "    IGBT reference detail (included in IGBT thermal):" << std::endl;
+        print_profile_line("    Parameter lookup", profiling_totals.igbt_parameter_lookup);
+        print_profile_line("    Input/device build", profiling_totals.igbt_input_build);
+        print_profile_line("    Loss table IGBT1", profiling_totals.igbt_loss_igbt1);
+        print_profile_line("    Loss table IGBT2", profiling_totals.igbt_loss_igbt2);
+        print_profile_line("    Loss table Diode1", profiling_totals.igbt_loss_diode1);
+        print_profile_line("    Loss table Diode2", profiling_totals.igbt_loss_diode2);
+        print_profile_line("    Thermal RC integration", profiling_totals.igbt_thermal_rc);
+        print_profile_line("Fan reliability", profiling_totals.fan_reliability);
+        print_profile_line("Capacitor reliability", profiling_totals.capacitor_reliability);
+        print_profile_line("IGBT reliability", profiling_totals.igbt_reliability);
+        print_profile_line("PCB reliability", profiling_totals.pcb_reliability);
+        print_profile_line("Stressor CSV output", profiling_totals.stressor_csv);
+        print_profile_line("Profiled subtotal", profiled_time);
         
         // Write timing log
         std::string topology_str = std::to_string(topology_level) + "l" + std::to_string(model_stage) + "s";
@@ -2019,12 +3756,19 @@ int main(int argc, char** argv) {
             timing_log << std::fixed << std::setprecision(6);
             timing_log << "Topology: " << topology_str << std::endl;
             timing_log << "Number of GPUs: " << num_gpus << std::endl;
+            timing_log << "Precision: " << precision_to_string(options.precision) << std::endl;
+            timing_log << "Pipeline: " << (options.pipeline_enabled ? "on" : "off") << std::endl;
+            timing_log << "Batch Size Limit: "
+                       << (options.batch_size_limit > 0 ? std::to_string(options.batch_size_limit) : std::string("auto"))
+                       << std::endl;
             timing_log << "Total Cases per Iteration: " << total_cases << std::endl;
             timing_log << "Batch Size: " << batch_size << std::endl;
             timing_log << "Number of Rounds per Iteration: " << options.num_rounds << std::endl;
             timing_log << "Total Mission Profile Iterations: " << mission_profile_iteration << std::endl;
             timing_log << "Total Rounds: " << (mission_profile_iteration * options.num_rounds) << std::endl;
-            timing_log << "Failed Component: " << failed_component << std::endl;
+            timing_log << "Failed Component: "
+                       << (stopped_by_iteration_limit ? "None (max iterations reached)" : failed_component)
+                       << std::endl;
             timing_log << "Total Wall Clock Time: " << total_duration << " s" << std::endl;
             timing_log << "Simulation Time per GPU:" << std::endl;
             for (int i = 0; i < num_gpus; ++i) {
@@ -2033,6 +3777,37 @@ int main(int argc, char** argv) {
             timing_log << "Total Compute Time (all GPUs): " << total_simulation_time << " s" << std::endl;
             timing_log << "Average Time per Case: " << (total_duration / (total_cases * mission_profile_iteration)) << " s" << std::endl;
             timing_log << "Speedup: " << (total_simulation_time / total_duration) << "x" << std::endl;
+            timing_log << "\nProfiling Breakdown:" << std::endl;
+            timing_log << "  Static electrical cache: " << profiling_totals.static_cache_electrical << " s" << std::endl;
+            timing_log << "  Electrical GPU batches: " << profiling_totals.electrical_gpu << " s" << std::endl;
+            timing_log << "  Stress/Loss/Thermal: " << profiling_totals.stress_loss_thermal << " s" << std::endl;
+            timing_log << "  Stress/Loss/Thermal detail included above:" << std::endl;
+            timing_log << "    Stress calculation: " << profiling_totals.stress_calculation << " s" << std::endl;
+            timing_log << "    Capacitor loss: " << profiling_totals.capacitor_loss << " s" << std::endl;
+            timing_log << "    Power module loss: " << profiling_totals.power_module_loss << " s" << std::endl;
+            timing_log << "    Capacitor thermal: " << profiling_totals.capacitor_thermal << " s" << std::endl;
+            timing_log << "      Capacitor reference detail included in Capacitor thermal:" << std::endl;
+            timing_log << "        Harmonic extraction: " << profiling_totals.capacitor_ref_harmonic << " s" << std::endl;
+            timing_log << "        ESR grid: " << profiling_totals.capacitor_ref_esr_grid << " s" << std::endl;
+            timing_log << "        Loss grid: " << profiling_totals.capacitor_ref_loss_grid << " s" << std::endl;
+            timing_log << "        Polynomial fit: " << profiling_totals.capacitor_ref_polyfit << " s" << std::endl;
+            timing_log << "        Thermal iteration: " << profiling_totals.capacitor_ref_iteration << " s" << std::endl;
+            timing_log << "        Fallback static thermal: " << profiling_totals.capacitor_fallback_static << " s" << std::endl;
+            timing_log << "    IGBT thermal: " << profiling_totals.igbt_thermal << " s" << std::endl;
+            timing_log << "      IGBT reference detail included in IGBT thermal:" << std::endl;
+            timing_log << "        Parameter lookup: " << profiling_totals.igbt_parameter_lookup << " s" << std::endl;
+            timing_log << "        Input/device build: " << profiling_totals.igbt_input_build << " s" << std::endl;
+            timing_log << "        Loss table IGBT1: " << profiling_totals.igbt_loss_igbt1 << " s" << std::endl;
+            timing_log << "        Loss table IGBT2: " << profiling_totals.igbt_loss_igbt2 << " s" << std::endl;
+            timing_log << "        Loss table Diode1: " << profiling_totals.igbt_loss_diode1 << " s" << std::endl;
+            timing_log << "        Loss table Diode2: " << profiling_totals.igbt_loss_diode2 << " s" << std::endl;
+            timing_log << "        Thermal RC integration: " << profiling_totals.igbt_thermal_rc << " s" << std::endl;
+            timing_log << "  Fan reliability: " << profiling_totals.fan_reliability << " s" << std::endl;
+            timing_log << "  Capacitor reliability: " << profiling_totals.capacitor_reliability << " s" << std::endl;
+            timing_log << "  IGBT reliability: " << profiling_totals.igbt_reliability << " s" << std::endl;
+            timing_log << "  PCB reliability: " << profiling_totals.pcb_reliability << " s" << std::endl;
+            timing_log << "  Stressor CSV output: " << profiling_totals.stressor_csv << " s" << std::endl;
+            timing_log << "  Profiled subtotal: " << profiled_time << " s" << std::endl;
             timing_log << "\nFinal Degradation Progress:" << std::endl;
             timing_log << "  Fan Electrical External: " << global_fan_stressor_electrical_external << std::endl;
             timing_log << "  Fan Electrical Internal: " << global_fan_stressor_electrical_internal << std::endl;
@@ -2060,6 +3835,30 @@ int main(int argc, char** argv) {
                   << (total_duration / (total_cases * mission_profile_iteration)) << " s" << std::endl;
         std::cout << "  Speedup: " << std::setprecision(2) 
                   << (total_simulation_time / total_duration) << "x" << std::endl;
+
+        if (!options.verbose) {
+            summary << "Final accumulated damage (dimensionless):\n";
+            for (std::size_t mode = 0; mode < run_report.accumulated_damage.size(); ++mode) {
+                summary << "  " << tracepv::reporting::damage_mode_name(mode) << ": "
+                        << std::scientific << std::setprecision(6)
+                        << run_report.accumulated_damage[mode] << '\n';
+            }
+            summary << "  Represented exposure: " << std::fixed << std::setprecision(6)
+                    << run_report.represented_exposure_hours << " h ("
+                    << run_report.accepted_case_count << " processed 5-minute cases)" << std::endl;
+        }
+        if (options.export_lifetime) {
+            tracepv::reporting::write_lifetime_reports(options.report_output_dir, run_report);
+            summary << "Lifetime reports: " << options.report_output_dir
+                    << "/lifetime.csv and lifetime.json\n"
+                    << "  Projections use constant average damage, not an exact failure time."
+                    << std::endl;
+        }
+        if (options.export_wall_time) {
+            tracepv::reporting::write_wall_time_report(options.report_output_dir, run_report);
+            summary << "Wall-time report: " << options.report_output_dir
+                    << "/wall_time.json" << std::endl;
+        }
         
     } catch (const std::exception& ex) {
         std::cerr << "ERROR: " << ex.what() << std::endl;

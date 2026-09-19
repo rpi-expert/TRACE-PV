@@ -25,7 +25,11 @@ std::vector<SimulationCase> load_mission_profile(
  * Load mission profile from one CSV file.
  *
  * Supported formats:
- * - time,ambient_temperature,rh,GHI,ac_voltage[,ac_power]
+ * - time,ambient_temperature,rh,GHI,ac_voltage[,ac_power[,internal_temperature]]
+ *
+ * ac_power is in W and positive values mean power exported to the grid.
+ * internal_temperature is an optional measured/local enclosure boundary. When
+ * present, it overrides the environmental-model temperature for that row.
  * - ambient_temperature,solar_irradiance,ac_voltage
  */
 std::vector<SimulationCase> load_mission_profile_csv(

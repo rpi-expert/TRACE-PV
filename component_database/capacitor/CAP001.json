@@ -9,10 +9,9 @@
     "V0": 475,
     "T0": 105
   },
-  "rth_amb": 16.6783,
-  "rth_surf": 8.3391,
+  "rth_amb": 16.4955,
+  "rth_surf": 11.4455,
   "esr": 1.5071e-4,
   "capacitance": 330e-6,
   "description": "SMA SUNNY TRIPOWER 30000TL-US DC Caps"
 }
-

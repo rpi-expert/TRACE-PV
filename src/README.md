@@ -42,6 +42,10 @@ time,ambient_temperature,rh,GHI,ac_voltage,ac_power
 2024-01-01 07:25:00,2.09,96.38,5.11,259.62,300
 ```
 
+`ac_power` is expressed in watts with positive values representing power
+exported by the inverter to the grid. When it is absent, GHI is not used as an
+enclosure heat-load substitute.
+
 - `ambient_temperature`: Temperature in Celsius (typically 15-45°C)
 - `solar_irradiance`: Solar irradiance in W/m² (typically 200-1200 W/m²)
 - `ac_voltage`: AC voltage RMS line-to-line in Volts (typically 400-500 V)

@@ -170,7 +170,7 @@ double calculate_igbt_nf_deltaT(double deltaT, double Tj_max, const PowerModuleC
 }
 
 // Calculate lifetime for IGBT using Arrhenius model (corrosion/dendrites model)
-// Acceleration Factor: AF = (rh/RH_ref)^n1 * exp(Ea / kB * (1/T_ref - 1/T_internal)) * (V_ref/voltage)^n2
+// Acceleration Factor: AF = (rh/RH_ref)^n1 * exp(Ea / kB * (1/T_ref - 1/T_internal)) * (voltage/V_ref)^n2
 // Lifetime = reference_lifetime / AF
 // Input: T_internal (internal temperature in Celsius from internal conditions calculation), 
 //        rh (relative humidity in % from mission profile), 
@@ -192,14 +192,17 @@ double calculate_igbt_lifetime_arrhenius(
     double voltage_ref = coeffs.arrhenius_model.V_ref;  // Reference voltage in V
     
     // Calculate acceleration factor using corrosion/dendrites model
-    // AF = (rh/RH_ref)^n1 * exp(Ea / kB * (1/T_ref - 1/Tj)) * (V_ref/voltage)^n2
+    // AF = (rh/RH_ref)^n1 * exp(Ea / kB * (1/T_ref - 1/T_internal)) * (voltage/V_ref)^n2
     double rh_ratio = rh / rh_ref ;
     double rh_factor = std::pow(rh_ratio, coeffs.arrhenius_model.n1);
     
     double temp_factor = std::exp(coeffs.arrhenius_model.Ea / BOLTZMANN_CONSTANT * 
                                    (1.0 / T_ref_kelvin - 1.0 / T_internal_kelvin));
     
-    double voltage_factor = std::pow(voltage_ref / voltage, coeffs.arrhenius_model.n2);
+    double voltage_factor = 0.0;
+    if (voltage > 0.0 && voltage_ref > 0.0) {
+        voltage_factor = std::pow(voltage / voltage_ref, coeffs.arrhenius_model.n2);
+    }
     
     double AF = rh_factor * temp_factor * voltage_factor;
     
@@ -209,4 +212,3 @@ double calculate_igbt_lifetime_arrhenius(
     
     return (lifetime > 0.0) ? lifetime : 1e10;  // Return large value if invalid
 }
-

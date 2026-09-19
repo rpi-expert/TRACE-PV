@@ -124,7 +124,7 @@ StressResults calculate_stress(const UnifiedOutputs& outputs,
         
         // I_cap = I_source - I_draw
         for (int i = 0; i < num_samples; ++i) {
-            results.I_cap[i] = I_source_est - results.I_cap[i] / 5;
+            results.I_cap[i] = I_source_est - results.I_cap[i];
         }
     }
     
@@ -133,7 +133,11 @@ StressResults calculate_stress(const UnifiedOutputs& outputs,
     for (int i = 0; i < num_samples; ++i) {
         sum_squares += results.I_cap[i] * results.I_cap[i];
     }
-    results.I_cap_rms = std::sqrt(sum_squares / num_samples) / 5;
+    // The waveform is total DC-link bank current; divide only the final RMS
+    // to obtain the per-capacitor stress for the parallel devices.
+    results.I_cap_rms =
+        std::sqrt(sum_squares / num_samples) /
+        kDcLinkCapacitorParallelDeviceCount;
     
     // Cleanup
     cudaFree(d_states);
@@ -146,7 +150,11 @@ StressResults calculate_stress(const UnifiedOutputs& outputs,
     return results;
 }
 
-// Calculate AC power from I2 (grid-side inductor currents) and Vc (filter capacitor voltages)
+// Calculate AC power exported by the inverter from I2 (grid-side inductor
+// currents) and Vc (filter capacitor voltages).  The state-space current
+// reference is positive from the grid towards the inverter, so exported power
+// is the negative of v*i.  Public AC-power values use the convention
+// "positive = inverter exports power to the grid".
 // State vector structure:
 //   For 2-level stage 1: [i_L1a, i_L1b, i_L1c, i_L2a, i_L2b, i_L2c, v_Ca, v_Cb, v_Cc] (9 states)
 //   For 2-level stage 2: [i_L1a, i_L1b, i_L1c, i_L2a, i_L2b, i_L2c, v_Ca, v_Cb, v_Cc, i_Lb, v_dc] (11 states)
@@ -170,8 +178,7 @@ ACPowerResults calculate_ac_power(const UnifiedOutputs& outputs,
     const int idx_v_Cb = 7;
     const int idx_v_Cc = 8;
     
-    // Calculate instantaneous power for each sample
-    // p_AC(t) = v_Ca(t) * i_L2a(t) + v_Cb(t) * i_L2b(t) + v_Cc(t) * i_L2c(t)
+    // First calculate v*i in the state-space passive sign convention.
     for (int k = 0; k < num_samples; ++k) {
         const double* sample_states = outputs.states.data() + k * params.num_states;
         
@@ -187,7 +194,12 @@ ACPowerResults calculate_ac_power(const UnifiedOutputs& outputs,
         results.p_AC_instantaneous[k] = v_Ca * i_L2a + v_Cb * i_L2b + v_Cc * i_L2c;
     }
     
-    // Calculate average active power: P_out = (1/N) * sum(p_AC[k])
+    // Convert the state-space passive sign convention to exported power.
+    for (double& power : results.p_AC_instantaneous) {
+        power = -power;
+    }
+
+    // Calculate average exported active power: P_out = (1/N) * sum(p_AC[k])
     double sum_power = 0.0;
     for (int k = 0; k < num_samples; ++k) {
         sum_power += results.p_AC_instantaneous[k];
@@ -211,4 +223,3 @@ double calculate_equivalent_ac_power(const std::vector<double>& p_AC_instantaneo
     }
     return sum / static_cast<double>(p_AC_instantaneous.size());
 }
-

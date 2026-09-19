@@ -77,6 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build component_parameters.db from component JSON sources."
     )
+    parser.add_argument("--skip-legacy-pv", action="store_true", help="initialize component tables only; generate runtime IV database separately")
     parser.add_argument(
         "--force",
         action="store_true",
@@ -102,7 +103,8 @@ def main() -> int:
             create_tables(conn)
             loaded = load_component_sources(conn, script_dir)
 
-        generate_pv_performance(script_dir, db_path)
+        if not args.skip_legacy_pv:
+            generate_pv_performance(script_dir, db_path)
         print(f"\nDatabase generation complete: {db_path}")
         print(f"Component JSON files loaded: {loaded}")
         return 0
