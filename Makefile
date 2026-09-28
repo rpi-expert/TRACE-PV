@@ -89,6 +89,8 @@ $(TARGET_PATH): $(OBJS)
 
 # Compile main.cpp
 $(BIN_DIR)/main.o: $(SRC_DIR)/main.cpp \
+                   $(SRC_DIR)/simulation_preparation/iv_database.h \
+                   $(SRC_DIR)/simulation_model.h \
                    $(SRC_DIR)/model_validation/intermediate_value_exporter.h \
                    $(SRC_DIR)/reporting/run_report.h \
                    $(SRC_DIR)/reporting/console_output.h \
@@ -270,3 +272,10 @@ test-loss-thermal-cleanup:
 	$(HOST_TEST_DIR)/simplified_loss_thermal_test
 
 .PHONY: all run clean test-reporting test-loss-thermal-cleanup
+
+# CPU-only validation of mission cleaning and the runtime IV database.
+.PHONY: test-mission-iv
+test-mission-iv:
+	@mkdir -p $(HOST_TEST_DIR)
+	$(HOST_CXX) -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -I$(SRC_DIR) $(SQLITE3_CFLAGS) tests/mission_iv_input_test.cpp $(SRC_DIR)/simulation_preparation/mission_profile_loader.cpp $(SRC_DIR)/simulation_model.cpp -lsqlite3 -o $(HOST_TEST_DIR)/mission_iv_input_test
+	$(HOST_TEST_DIR)/mission_iv_input_test

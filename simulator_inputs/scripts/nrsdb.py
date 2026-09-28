@@ -4,20 +4,20 @@ NSRDB Data Download Script
 Uses virtual environment at ./venv/bin/python3 if available
 """
 
-import os
 import pandas as pd
 import urllib.parse
 import urllib.request
 import json
 import requests
 import time
+import os
 
 # Based on: https://developer.nrel.gov/docs/solar/nsrdb/nsrdb-GOES-conus-v4-0-0-download/
 BASE_URL_CSV = "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-conus-v4-0-0-download.csv"
 BASE_URL_JSON = "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-conus-v4-0-0-download.json"
 
-API_KEY = os.environ.get("NSRDB_API_KEY", "")
-EMAIL = "wangl27@rpi.edu"  # Required for API tracking
+API_KEY = (os.environ.get("NREL_API_KEY") or os.environ.get("NSRDB_API_KEY", "")).strip()
+EMAIL = os.environ.get("NREL_EMAIL", "").strip()
 
 # You can provide either location_ids or coordinates
 # Format: location_id (string) or [latitude, longitude] (list)
@@ -223,7 +223,7 @@ def convert_to_mission_profile(input_filename):
         })
         
         # Save as mission_profile.csv
-        output_filename = 'simulator_inputs/mission_profile/environmental_condition/mission_profile.csv'
+        output_filename = 'simulator_inputs/mission_profile/environmental_condition/environmental_mission_profile.csv'
         mission_df.to_csv(output_filename, index=False)
 
         print(f"Mission profile saved to: {output_filename}")
@@ -238,6 +238,12 @@ def convert_to_mission_profile(input_filename):
         return False
 
 def main():
+    if not API_KEY or not EMAIL:
+        raise SystemExit(
+            "Set NREL_API_KEY and NREL_EMAIL before running this downloader. "
+            "See .env.example in the project root."
+        )
+
     # Request only: GHI, ambient temperature, relative humidity
     # Available attributes: ghi, air_temperature, relative_humidity
     attributes = 'ghi,air_temperature,relative_humidity'

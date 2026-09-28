@@ -37,3 +37,7 @@ plots/*.png
 
 # Local duplicate/development database
 component_database/components.db
+
+# Generated runtime IV database and deployment evidence
+component_database/runtime_iv_curves.db
+docs/deployment_*/evidence.tar.gz

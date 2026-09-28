@@ -1,3 +1,4 @@
+#include "simulation_preparation/iv_database.h"
 #include "multi_physics_simulator/electrical_simulation/a2s_gpu.h"
 #include "simulation_params.h"
 #include "simulation_case.h"
@@ -8,8 +9,6 @@
 #include "multi_physics_simulator/thermal_simulation/simplified_loss_thermal.h"
 #include "multi_physics_simulator/environmental_simulation/internal_conditions.h"
 #include "component_database/component_database.h"
-// IVCurveSimulator converted to Python - commented out for now
-// #include "component_database/offline_trainning/iv_curve_simulator.h"
 #include "simulation_model.h"
 #include "simulation_preparation/pv_voltage_iv_curve.h"
 #include "simulation_preparation/mission_profile_loader.h"
@@ -603,26 +602,6 @@ int main(int argc, char** argv) {
             }
         }
         
-        // ====================================================================
-        // Section 3: Initialize IV Curve Simulator for PV Panel
-        // ====================================================================
-        // IVCurveSimulator converted to Python - commented out for now
-        // TODO: Create C++ wrapper or integrate Python version
-        // std::unique_ptr<IVCurveSimulator> iv_simulator = nullptr;
-        
-        // if (!sim_model.pv_panel_part_number.empty()) {
-        //     iv_simulator = std::make_unique<IVCurveSimulator>();
-        //     if (iv_simulator->initialize(db_path, sim_model.pv_panel_part_number)) {
-        //         std::cout << "\nIV Curve Simulator initialized for PV panel: " 
-        //                   << sim_model.pv_panel_part_number << std::endl;
-        //     } else {
-        //         std::cerr << "Warning: Failed to initialize IV curve simulator for panel: " 
-        //                   << sim_model.pv_panel_part_number << std::endl;
-        //         iv_simulator.reset();
-        //     }
-        // }
-        // ====================================================================
-        
         std::vector<SimulationCase> all_cases;
         std::string input_description;
 
@@ -664,63 +643,19 @@ int main(int argc, char** argv) {
         // ====================================================================
         // Section 4: Pre-load IV Curve Data for Mission Profile
         // ====================================================================
-        // IVCurveData structure is defined above in namespace
+        IVDatabase iv_database(sim_model.iv_database_path, sim_model.pv_panel_part_number);
         std::vector<IVCurveData> iv_curve_data;
         iv_curve_data.reserve(all_cases.size());
-        
-        // IVCurveSimulator converted to Python - commented out for now
-        // TODO: Create C++ wrapper or integrate Python version
-        // if (iv_simulator) {
-        //     std::cout << "\nPre-loading IV curve data for mission profile..." << std::endl;
-        //     int loaded_count = 0;
-        //     
-        //     for (size_t i = 0; i < all_cases.size(); ++i) {
-        //         const auto& sim_case = all_cases[i];
-        //         IVCurveData iv_data;
-        //         iv_data.valid = false;
-        //         
-        //         // Get Voc and Isc for this mission profile point
-        //         if (iv_simulator->get_voc_isc(
-        //             sim_case.solar_irradiance, 
-        //             sim_case.ambient_temperature, 
-        //             iv_data.voc, 
-        //             iv_data.isc)) {
-        //             
-        //             // Calculate operating voltage (e.g., MPP at ~0.8*Voc, or use DC-link voltage)
-        //             // For now, use a simple MPP approximation: V_MPP ≈ 0.8 * Voc
-        //             iv_data.pv_voltage = iv_data.voc * 0.8;
-        //             
-        //             // Get current at operating voltage
-        //             iv_data.pv_current = iv_simulator->get_current(
-        //                 sim_case.solar_irradiance,
-        //                 sim_case.ambient_temperature,
-        //                 iv_data.pv_voltage
-        //             );
-        //             
-        //             if (iv_data.pv_current > 0) {
-        //                 iv_data.valid = true;
-        //                 loaded_count++;
-        //             }
-        //         }
-        //         
-        //         iv_curve_data.push_back(iv_data);
-        //         
-        //         // Progress indicator
-        //         if ((i + 1) % 10000 == 0 || (i + 1) == all_cases.size()) {
-        //             std::cout << "  Processed " << (i + 1) << "/" << all_cases.size() 
-        //                       << " mission profile points..." << std::endl;
-        //         }
-        //     }
-        //     
-        //     std::cout << "  Successfully loaded IV curve data for " << loaded_count 
-        //               << "/" << all_cases.size() << " cases" << std::endl;
-        // } else {
-            // No IV simulator - fill with invalid data (default constructor sets all to 0/false)
-            iv_curve_data.resize(all_cases.size(), IVCurveData());
-            std::cout << "\nWarning: No IV curve simulator available. Using simple PV voltage model." << std::endl;
-        // }
-        // ====================================================================
-        
+        for (const auto& sc : all_cases) {
+            iv_curve_data.push_back(iv_database.lookup(sc.solar_irradiance,
+                sc.ambient_temperature, sim_model.pv_modules_per_string,
+                sim_model.pv_parallel_strings));
+        }
+        std::cout << "TRACEPV_IV loaded=" << iv_curve_data.size()
+                  << " database=" << sim_model.iv_database_path
+                  << " series=" << sim_model.pv_modules_per_string
+                  << " parallel=" << sim_model.pv_parallel_strings << std::endl;
+
         // Create base simulation parameters from database
         // Database is required for all inverter and grid parameters
         SimulationParameters base_params;
@@ -1001,6 +936,31 @@ int main(int argc, char** argv) {
             }
         }
 
+        // The environmental model needs the complete chronological load history.
+        // Calculate missing power first, retaining only scalars, not year-long waveforms.
+        // Keep mission inputs unchanged so calculated power is never labelled measured.
+        std::vector<double> calculated_environmental_power(all_cases.size(), 0.0);
+        if (cudaSetDevice(0) != cudaSuccess)
+            throw std::runtime_error("Cannot select GPU for electrical power prepass");
+        std::cout << "TRACEPV_POWER_PREPASS total=" << all_cases.size() << std::endl;
+        for (std::size_t i = 0; i < all_cases.size(); ++i) {
+            if (all_cases[i].has_ac_power) continue;
+            SimulationParameters parameters = base_params;
+            update_params_for_case(parameters, all_cases[i], iv_curve_data[i]);
+            const auto outputs = run_unified_gpu_batch(
+                std::vector<SimulationParameters>{parameters}, options.precision);
+            if (outputs.outputs.size() != 1)
+                throw std::runtime_error("Electrical power prepass failed at " + all_cases[i].time);
+            const auto power = calculate_ac_power(outputs.outputs.front(), parameters);
+            const double watts = calculate_equivalent_ac_power(power.p_AC_instantaneous);
+            if (power.p_AC_instantaneous.empty() || !std::isfinite(watts))
+                throw std::runtime_error("Invalid calculated AC power at " + all_cases[i].time);
+            calculated_environmental_power[i] = watts;
+            if ((i+1)%100 == 0 || i+1 == all_cases.size())
+                std::cout << "TRACEPV_POWER_PREPASS processed=" << i+1
+                          << " total=" << all_cases.size() << std::endl;
+        }
+
         std::vector<double> all_ambient_temps;
         std::vector<double> all_ambient_rhs;
         std::vector<double> all_environmental_loads;
@@ -1009,18 +969,16 @@ int main(int argc, char** argv) {
         all_environmental_loads.reserve(all_cases.size());
 
         bool has_any_ac_power = false;
-        std::size_t missing_ac_power_cases = 0;
+        std::size_t environmental_case_index = 0;
         double max_environmental_load = 0.0;
         for (const SimulationCase& sc : all_cases) {
             all_ambient_temps.push_back(sc.ambient_temperature);
             all_ambient_rhs.push_back(sc.rh);
 
-            // Enclosure heating must be driven by power/loss, never silently by
-            // irradiance. A missing power value is treated as zero and reported
-            // so callers can provide a measured/calibrated thermal load.
-            const double load_value = sc.has_ac_power ? std::max(0.0, sc.ac_power) : 0.0;
-            has_any_ac_power = has_any_ac_power || sc.has_ac_power;
-            missing_ac_power_cases += sc.has_ac_power ? 0 : 1;
+            const double load_value = std::max(0.0, sc.has_ac_power ? sc.ac_power :
+                calculated_environmental_power[environmental_case_index]);
+            ++environmental_case_index;
+            has_any_ac_power = true;
             all_environmental_loads.push_back(load_value);
             if (std::isfinite(load_value) && load_value > max_environmental_load) {
                 max_environmental_load = load_value;
@@ -1031,12 +989,6 @@ int main(int argc, char** argv) {
         // cases, keep the DDM notebook's 10 kW reference floor so a single
         // low-power case is not normalized to full load.
         const double rated_environmental_load = std::max(max_environmental_load, 10000.0);
-
-        if (missing_ac_power_cases > 0) {
-            std::cerr << "Warning: " << missing_ac_power_cases
-                      << " mission cases have no ac_power; enclosure heat load is set to zero "
-                         "for those cases (GHI fallback is disabled)." << std::endl;
-        }
 
         std::vector<double> all_internal_temps;
         std::vector<double> all_internal_rhs;

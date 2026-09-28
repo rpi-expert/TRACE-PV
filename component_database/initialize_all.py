@@ -233,7 +233,7 @@ def parse_args() -> argparse.Namespace:
         help="Remove and rebuild an existing database.",
     )
     parser.add_argument(
-        "--skip-pv",
+        "--skip-pv", "--skip-legacy-pv",
         action="store_true",
         help="Initialize component tables without generating PV performance data.",
     )

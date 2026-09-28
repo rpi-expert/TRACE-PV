@@ -1,70 +1,19 @@
-# Getting Started with Create React App
+# TRACE-PV WebUI
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+The React frontend is served by `server.py`, a standard-library Python HTTP server that also starts simulator jobs. Build the simulator and databases first using the [root README](../README.md).
 
-## Available Scripts
+From the repository root:
 
-In the project directory, you can run:
+```bash
+(cd webui && npm ci && npm run build)
+source setup_env.sh
+TRACEPV_WEBUI_HOST=127.0.0.1 TRACEPV_WEBUI_PORT=8080 python3 webui/server.py
+```
 
-### `yarn start`
+Open `http://localhost:8080`. For a remote host, forward port 8080 over SSH and open the same address locally. Keep the backend bound to localhost; the job-control API has no standalone authentication layer. Use a service manager such as supervisor for a persistent deployment.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+On Vast images, Node may require `. /opt/nvm/nvm.sh` in noninteractive shells. The backend's `webui/build/` directory must exist or frontend requests return 404. Build assets are generated on the deployment host; do not copy `node_modules` between systems.
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+Simulator jobs run from the project root and write per-job logs under `webui/runs/`. A job marked started is not necessarily a completed simulation: inspect its status, progress and warnings. The default mission requires the full split CSVs; use the committed `tests/fixtures/deployment_mission.csv` for deployment checks, and limit iterations.
 
-### `yarn test`
-
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `yarn build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `yarn eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `yarn build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+For frontend development, `npm start` runs the React development server. Its package proxy is `http://localhost:3001`; start the Python backend with `TRACEPV_WEBUI_PORT=3001` in that mode. Production uses the single Python server on port 8080.

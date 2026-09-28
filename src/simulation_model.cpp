@@ -81,6 +81,20 @@ bool load_simulation_model(const std::string& json_file, SimulationModel& model)
     pos = json_content.find("\"pv_panel\"", 0);
     if (pos != std::string::npos) {
         model.pv_panel_part_number = extract_json_string(json_content.substr(pos), "part_number");
+        const auto panel = json_content.substr(pos, json_content.find('}', pos) - pos);
+        const auto iv_path = extract_json_string(panel, "iv_database");
+        if (!iv_path.empty()) model.iv_database_path = iv_path;
+        for (const auto& key : {"modules_per_string", "parallel_strings"}) {
+            const auto at = panel.find(std::string("\"") + key + "\"");
+            if (at == std::string::npos) continue;
+            try {
+                const int count = std::stoi(panel.substr(panel.find(':', at) + 1));
+                if (count <= 0) return false;
+                if (std::string(key) == "modules_per_string") model.pv_modules_per_string = count;
+                else model.pv_parallel_strings = count;
+            } catch (...) { return false; }
+        }
+
     }
     
     // Extract pv_inverter part number
