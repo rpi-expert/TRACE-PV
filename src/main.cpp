@@ -288,7 +288,7 @@ void print_usage(const char* program) {
     std::cout << "  --rounds: Number of chunks used to process one mission/static profile (default: 1)" << std::endl;
     std::cout << "  --max-iterations: Maximum times to repeat the whole mission/static profile before stopping (default: 0, unlimited)" << std::endl;
     std::cout << "  --post-processing-mode: fast, reference, or hybrid (default: reference)" << std::endl;
-    std::cout << "     fast = fallback loss/thermal + per-case degradation, skips reference thermal/rainflow" << std::endl;
+    std::cout << "     fast = fallback loss/thermal + per-case degradation" << std::endl;
     std::cout << "     reference = detailed reference thermal and cycle models" << std::endl;
     std::cout << "     hybrid = currently aliases reference; reserved for sampled calibration" << std::endl;
     std::cout << "  --thermal-step: Reference IGBT thermal integration step in seconds (default: 0 = switching timestep)" << std::endl;
@@ -297,12 +297,10 @@ void print_usage(const char* program) {
     std::cout << "  --batch-size-limit: Optional maximum cases per electrical batch (default: 0 = auto)" << std::endl;
     std::cout << "  --validation-output-dir: Enable model-validation intermediate CSV export to this directory" << std::endl;
     std::cout << "  --validation-waveform-cases: A2S waveform cases: none, all, or comma-separated zero-based indices (default: 0)" << std::endl;
-    std::cout << "  --wall-time: Export wall_time.json (elapsed wall clock, not summed worker time)" << std::endl;
+    std::cout << "  --wall-time: Export wall_time.json (elapsed wall-clock time)" << std::endl;
     std::cout << "  --lifetime: Export lifetime.csv and lifetime.json with damage-rate projections and failure status" << std::endl;
     std::cout << "  --output-dir: Directory for the selected wall-time/lifetime reports (default: results/summary)" << std::endl;
     std::cout << "  --verbose: Enable detailed diagnostic/profiling console output (default: concise)" << std::endl;
-    std::cout << "     Report flags may be combined; existing stressor/thermal/validation outputs are unchanged." << std::endl;
-    std::cout << "     Lifetime projections use processed 5-minute intervals, not one year per iteration." << std::endl;
     std::cout << "  --modulation: Modulation type svm or spwm (default: svm)" << std::endl;
     std::cout << "  --ngpus: Number of GPUs to use, or 'all' to use all available (default: use all available)" << std::endl;
     std::cout << "  --model: Simulation model JSON file with component part numbers (default: simulator_inputs/simulation_model/example_simulation_model.json)" << std::endl;
@@ -3616,8 +3614,6 @@ int main(int argc, char** argv) {
                 degradation_reached = true;
                 failed_component = "PCB";
                 tracepv::reporting::debug_output() << "DEBUG: Degradation reached - PCB" << std::endl;
-            } else {
-                tracepv::reporting::debug_output() << "DEBUG: No degradation threshold reached yet" << std::endl;
             }
             
             const bool reached_iteration_limit =
@@ -3625,10 +3621,8 @@ int main(int argc, char** argv) {
                 mission_profile_iteration >= options.max_iterations;
 
             if (!degradation_reached && !reached_iteration_limit) {
-                std::cout << "No component has reached degradation = 1.0 yet." << std::endl;
                 std::cout << "Starting next mission profile iteration...\n" << std::endl;
             } else if (reached_iteration_limit) {
-                std::cout << "No component has reached degradation = 1.0 yet." << std::endl;
                 std::cout << "Max mission profile iterations reached; stopping simulation." << std::endl;
             } else {
                 std::cout << "\n" << std::string(60, '=') << std::endl;
@@ -3850,8 +3844,7 @@ int main(int argc, char** argv) {
         if (options.export_lifetime) {
             tracepv::reporting::write_lifetime_reports(options.report_output_dir, run_report);
             summary << "Lifetime reports: " << options.report_output_dir
-                    << "/lifetime.csv and lifetime.json\n"
-                    << "  Projections use constant average damage, not an exact failure time."
+                    << "/lifetime.csv and lifetime.json"
                     << std::endl;
         }
         if (options.export_wall_time) {

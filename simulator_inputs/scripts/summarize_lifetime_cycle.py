@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Summarize one mission-profile iteration and project the first failure cycle.
 
-This is a portable post-processor for a stressor CSV emitted by trace_pv.  It
-does not replace the CUDA electrical/thermal simulation that creates that CSV.
+Post-process a stressor CSV emitted by trace_pv.
 """
 
 from __future__ import annotations
