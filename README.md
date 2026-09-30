@@ -38,6 +38,8 @@ python3 -m pip install -r requirements.txt
 source setup_env.sh
 ```
 
+`requirements.txt` leaves package versions unpinned so pip can resolve dependencies for the target Python environment and reuse installed versions. For a reproducible deployment, save the validated environment with `python3 -m pip freeze > requirements-lock.txt`. Unpinned dependencies do not guarantee compatibility with every past or future release; run the checks below after changing the environment.
+
 Do not copy a macOS virtual environment or compiled binary to Linux. Recreate the environment and build on the target host. `setup_env.sh` activates an existing `venv`, adds CUDA to `PATH`, and adds the optional project SQLite library to `LD_LIBRARY_PATH`; it does not install dependencies.
 
 ## 3. Prepare both databases
