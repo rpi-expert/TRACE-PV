@@ -45,15 +45,16 @@ Do not copy a macOS virtual environment or compiled binary to Linux. Recreate th
 The default model needs a **component database** and a separate **runtime I–V curve database**:
 
 ```bash
-python3 component_database/initialize_all.py --skip-legacy-pv
-python3 tools/build_runtime_iv_database.py
+python3 component_database/initialize_all.py
 ```
 
-The first command creates `component_database/component_parameters.db` from component JSON files, including inverter and grid tables. It verifies an existing database and leaves complete component data unchanged; an incomplete database causes a nonzero exit status. To rebuild an existing database, first back it up, then use `--force --skip-legacy-pv`.
+This command creates `component_database/component_parameters.db` from component JSON files, including inverter and grid tables. It verifies an existing database and leaves complete component data unchanged; an incomplete database causes a nonzero exit status. To rebuild an existing database, first back it up, then use `--force`.
 
-The second command generates `component_database/runtime_iv_curves.db` for CS6U-330P, with an STC sanity check against the panel specification. It uses the 72-cell single-diode model and covers 0.01–1600 W/m² and −45–105 °C. Do not substitute the legacy offline I–V generator: its module thermal-voltage calculation omits the cell count.
+By default, the same command also generates `component_database/runtime_iv_curves.db` for CS6U-330P, with an STC sanity check against the panel specification. It uses the 72-cell single-diode model and covers 0.01–1600 W/m² and −45–105 °C. Do not substitute the legacy offline I–V generator: its module thermal-voltage calculation omits the cell count.
 
-The default model JSON explicitly selects this I–V database and an **18s6p** array. For another panel/array, update `pv_panel.part_number`, `iv_database`, `modules_per_string`, and `parallel_strings`, and generate matching curves using the tool's `--panel`/`--output` options. Invalid curves or queries outside the database grid fail explicitly.
+`--runtime-iv-curve` explicitly selects the default behavior. Use `--skip-pv` only for component-only initialization. Runtime curves for the selected panel are regenerated on each run; complete component records are preserved. With `--database PATH`, the runtime database defaults to `runtime_iv_curves.db` beside that file.
+
+The default model JSON explicitly selects this I–V database and an **18s6p** array. For another panel/array, update `pv_panel.part_number`, `iv_database`, `modules_per_string`, and `parallel_strings`, and generate matching curves using the initializer’s `--panel`/`--iv-database` options. Invalid curves or queries outside the database grid fail explicitly.
 
 ### Thermal lookup data
 

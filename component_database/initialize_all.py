@@ -2,8 +2,8 @@
 """Initialize and verify the complete TRACE-PV component database.
 
 This entry point uses the current JSON loaders from ``init_database.py`` and
-the pure-Python PV performance generator.  It intentionally does not depend on
-the removed C++ ``offline_data_generator`` binary.
+the corrected runtime I–V generator by default. Component parameters and
+runtime curves are stored in separate SQLite databases.
 """
 
 import argparse
@@ -20,7 +20,7 @@ import init_database
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = SCRIPT_DIR / init_database.DB_FILE
 PV_PANEL_DIR = SCRIPT_DIR / "pv_panel"
-PV_GENERATOR = SCRIPT_DIR / "offline_trainning" / "offline_data_generator.py"
+PV_GENERATOR = SCRIPT_DIR.parent / "tools" / "build_runtime_iv_database.py"
 
 COMPONENT_LOADERS = {
     "capacitor": init_database.load_capacitor,
@@ -94,46 +94,6 @@ def component_database_status(db_path: Path) -> Tuple[bool, List[str]]:
     return not problems, problems
 
 
-def expected_pv_panels() -> Set[str]:
-    """Return all PV panel part numbers defined by the checked-in JSON files."""
-    expected = set()
-    for json_path in sorted(PV_PANEL_DIR.glob("*.json")):
-        if json_path.name == "topologies_options.json":
-            continue
-        with json_path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        part_number = data.get("PVpanel", {}).get("Part Number")
-        if not part_number:
-            raise ValueError(f"No PVpanel.Part Number found in {json_path}")
-        expected.add(str(part_number))
-    return expected
-
-
-def pv_database_status(db_path: Path) -> Tuple[bool, List[str]]:
-    """Check that every PV panel has generated performance data."""
-    try:
-        expected = expected_pv_panels()
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return False, [str(exc)]
-
-    try:
-        with sqlite3.connect(str(db_path)) as connection:
-            cursor = connection.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='pv_performance_maps'"
-            )
-            if cursor.fetchone() is None:
-                return False, ["Missing table: pv_performance_maps"]
-            cursor.execute("SELECT DISTINCT PartNumber FROM pv_performance_maps")
-            loaded = {str(row[0]) for row in cursor.fetchall()}
-    except sqlite3.Error as exc:
-        return False, [f"Could not inspect PV data in {db_path}: {exc}"]
-
-    missing = [f"Missing PV performance data: {name}" for name in sorted(expected - loaded)]
-    return not missing, missing
-
-
 def initialize_components(db_path: Path) -> bool:
     """Create the schema and load all component JSON files."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,26 +131,18 @@ def initialize_components(db_path: Path) -> bool:
     return True
 
 
-def generate_pv_data(db_path: Path) -> bool:
-    """Populate PV performance data with the checked-in Python generator."""
-    if not PV_GENERATOR.is_file():
-        print(f"PV generator not found: {PV_GENERATOR}", file=sys.stderr)
-        return False
-    if not PV_PANEL_DIR.is_dir():
-        print(f"PV panel directory not found: {PV_PANEL_DIR}", file=sys.stderr)
-        return False
-
+def generate_pv_data(db_path: Path, panel_path: Path) -> bool:
+    """Build corrected runtime curves; the generator checks STC voltage/power."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
-        sys.executable,
-        str(PV_GENERATOR),
-        str(db_path),
-        str(PV_PANEL_DIR),
+        sys.executable, str(PV_GENERATOR),
+        "--panel", str(panel_path), "--output", str(db_path),
     ]
-    print("Generating PV performance data with the Python generator...")
+    print(f"Generating runtime I–V curves: {db_path}", flush=True)
     result = subprocess.run(command, cwd=str(SCRIPT_DIR), check=False)
     if result.returncode != 0:
         print(
-            f"PV performance generation failed with exit code {result.returncode}.",
+            f"Runtime I–V generation failed with exit code {result.returncode}.",
             file=sys.stderr,
         )
         return False
@@ -205,10 +157,6 @@ def database_counts(db_path: Path) -> Dict[str, int]:
         for table in COMPONENT_LOADERS:
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
             counts[table] = int(cursor.fetchone()[0])
-        cursor.execute("SELECT COUNT(DISTINCT PartNumber) FROM pv_performance_maps")
-        counts["pv_panels"] = int(cursor.fetchone()[0])
-        cursor.execute("SELECT COUNT(*) FROM pv_performance_maps")
-        counts["pv_points"] = int(cursor.fetchone()[0])
     return counts
 
 
@@ -232,10 +180,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Remove and rebuild an existing database.",
     )
+    pv_options = parser.add_mutually_exclusive_group()
+    pv_options.add_argument(
+        "--runtime-iv-curve", dest="runtime_iv_curve", action="store_true",
+        help="Generate corrected runtime I–V curves (default).",
+    )
+    pv_options.add_argument(
+        "--skip-pv", dest="runtime_iv_curve", action="store_false",
+        help="Initialize only component parameters; skip runtime I–V generation.",
+    )
+    parser.set_defaults(runtime_iv_curve=True)
     parser.add_argument(
-        "--skip-pv", "--skip-legacy-pv",
-        action="store_true",
-        help="Initialize component tables without generating PV performance data.",
+        "--panel", default=str(PV_PANEL_DIR / "CS6U-330P.json"),
+        help="Panel JSON for runtime curves (default: CS6U-330P).",
+    )
+    parser.add_argument(
+        "--iv-database",
+        help="Runtime curve database (default: runtime_iv_curves.db beside --database).",
     )
     return parser.parse_args()
 
@@ -243,6 +204,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     db_path = resolve_database_path(args.database)
+
+    iv_path = (resolve_database_path(args.iv_database) if args.iv_database
+               else db_path.with_name("runtime_iv_curves.db"))
+    if args.runtime_iv_curve and iv_path == db_path:
+        print("Component and runtime I–V databases must use separate paths.", file=sys.stderr)
+        return 1
 
     print(f"TRACE-PV database: {db_path}")
     if args.force and db_path.exists():
@@ -265,31 +232,17 @@ def main() -> int:
         print_problems("Component verification failed:", component_problems)
         return 1
 
-    if args.skip_pv:
-        print("PV performance generation skipped by request.")
-        print("Component database initialization completed successfully.")
-        return 0
-
-    pv_ok, pv_problems = pv_database_status(db_path)
-    if not pv_ok:
-        print(f"PV data is incomplete ({len(pv_problems)} issue(s)).")
-        if not generate_pv_data(db_path):
+    if args.runtime_iv_curve:
+        if not generate_pv_data(iv_path, resolve_database_path(args.panel)):
             return 1
-
-    pv_ok, pv_problems = pv_database_status(db_path)
-    if not pv_ok:
-        print_problems("PV performance verification failed:", pv_problems)
-        return 1
+    else:
+        print("Runtime I–V generation skipped by request.")
 
     counts = database_counts(db_path)
     print("Database initialization and verification completed successfully.")
     print(
         "Component rows: "
         + ", ".join(f"{name}={counts[name]}" for name in COMPONENT_LOADERS)
-    )
-    print(
-        f"PV performance: panels={counts['pv_panels']}, "
-        f"grid points={counts['pv_points']}"
     )
     return 0
 

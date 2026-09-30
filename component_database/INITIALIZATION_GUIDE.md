@@ -3,8 +3,7 @@
 Run these commands from the repository root after installing `requirements.txt`:
 
 ```bash
-python3 component_database/initialize_all.py --skip-legacy-pv
-python3 tools/build_runtime_iv_database.py
+python3 component_database/initialize_all.py
 make test-mission-iv
 ```
 
@@ -15,12 +14,25 @@ The default runtime uses two separate databases:
 | `component_database/component_parameters.db` | Component parameters for capacitor, fan, power module, PCB, inverter and grid |
 | `component_database/runtime_iv_curves.db` | Corrected per-module I–V curves selected by the model JSON |
 
-`--skip-legacy-pv` is an alias for preview's existing `--skip-pv`. Both skip the legacy PV generator while creating and verifying all component tables. The initializer still supports `--database PATH`, validates existing component records, and returns nonzero for an incomplete database. It does not silently replace existing data.
+Runtime I–V generation is enabled by default; `--runtime-iv-curve` explicitly selects the same behavior. `--skip-pv` initializes only component parameters. The former `--skip-legacy-pv` option has been removed.
+
+The initializer validates existing component records and returns nonzero for an incomplete database. Complete component data is left unchanged, while corrected curves for the selected panel are regenerated on each run. Other panels in the runtime database are preserved. Generation failures return nonzero.
+
+`--database PATH` selects the component database. Runtime curves default to `runtime_iv_curves.db` in the same directory; use `--iv-database PATH` to override this. The two database paths must differ. Relative paths are resolved from the current working directory; default panel and component paths are resolved from the repository. For example:
+
+```bash
+python3 component_database/initialize_all.py --runtime-iv-curve \
+  --database /tmp/tracepv/components.db \
+  --iv-database /tmp/tracepv/curves.db \
+  --panel component_database/pv_panel/CS6U-330P.json
+```
+
+Update the simulation model's database paths when using custom outputs.
 
 After editing component JSON, back up the existing database before explicitly rebuilding it:
 
 ```bash
-python3 component_database/initialize_all.py --force --skip-legacy-pv
+python3 component_database/initialize_all.py --force
 ```
 
 An isolated component-database check is also supported:
@@ -37,6 +49,6 @@ python3 tools/build_runtime_iv_database.py \
   --output component_database/runtime_iv_curves.db
 ```
 
-Do not use `offline_trainning/offline_data_generator.py` to supply the runtime model: the legacy module-voltage calculation omits the series cell count. Legacy initializer behavior without a skip flag and the independent `verify_database.py` remain available for compatibility; the latter checks the old all-panel database layout and is not a verifier for the separate selected-panel runtime database. Use `make test-mission-iv` for the default runtime model.
+Do not use `offline_trainning/offline_data_generator.py` to supply the runtime model: the legacy module-voltage calculation omits the series cell count. The independent legacy `verify_database.py` checks the old all-panel database layout and is not a verifier for the separate selected-panel runtime database. Use `make test-mission-iv` for the default runtime model.
 
 Read the [root setup guide](../README.md) for field inputs, thermal lookup assets and GPU smoke tests.
